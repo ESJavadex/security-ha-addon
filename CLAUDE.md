@@ -100,11 +100,12 @@ Access the recordings viewer at `http://<host>:8081/`
 Features:
 - **Grid view** of all recordings with thumbnails
 - **Video player** - click any recording to play inline
+- **Favorites** - mark important recordings with a star, filter to show only favorites
 - **Delete recordings** - permanently remove with confirmation dialog
 - **Date filter** - filter recordings by specific date
 - **Sort order** - newest or oldest first
 - **Live status** - shows current motion/recording state
-- **Stats** - total recordings, size, and duration
+- **Stats** - total recordings, favorites count, size
 - **Keyboard navigation** - arrow keys to navigate, Escape to close
 
 ## API Endpoints
@@ -114,6 +115,7 @@ Features:
 - `GET /api/state` - Motion/recording state JSON
 - `GET /api/recordings` - List recordings
 - `DELETE /api/recordings/{filename}` - Delete a recording
+- `POST /api/recordings/{filename}/favorite` - Toggle favorite status
 - `GET /api/settings` - Current ROI and threshold settings
 - `POST /api/settings` - Update settings (JSON body)
 - `POST /api/settings/roi/{x1}/{x2}` - Quick set X axis ROI
