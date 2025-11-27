@@ -13,14 +13,20 @@ if command -v bashio &> /dev/null && bashio::supervisor.ping 2>/dev/null; then
     echo "[INFO] Running as Home Assistant add-on"
     echo "[INFO] Reading configuration from Supervisor API..."
 
-    STREAM_URL=$(bashio::config 'stream_url' 2>/dev/null) || STREAM_URL=""
-    MOTION_THRESHOLD=$(bashio::config 'motion_threshold' 2>/dev/null) || MOTION_THRESHOLD=""
-    MOTION_MIN_DURATION=$(bashio::config 'motion_min_duration' 2>/dev/null) || MOTION_MIN_DURATION=""
-    RECORDING_PRE_ROLL=$(bashio::config 'recording_pre_roll' 2>/dev/null) || RECORDING_PRE_ROLL=""
-    RECORDING_POST_ROLL=$(bashio::config 'recording_post_roll' 2>/dev/null) || RECORDING_POST_ROLL=""
-    RECORDINGS_PATH=$(bashio::config 'recordings_path' 2>/dev/null) || RECORDINGS_PATH=""
-    MAX_RECORDINGS=$(bashio::config 'max_recordings' 2>/dev/null) || MAX_RECORDINGS=""
-    LOG_LEVEL=$(bashio::config 'log_level' 2>/dev/null) || LOG_LEVEL=""
+    # Debug: show raw config
+    echo "[DEBUG] Raw addon config:"
+    bashio::addon.config || echo "[DEBUG] Could not read raw config"
+
+    STREAM_URL=$(bashio::config 'stream_url') || STREAM_URL=""
+    echo "[DEBUG] stream_url = '${STREAM_URL}'"
+
+    MOTION_THRESHOLD=$(bashio::config 'motion_threshold') || MOTION_THRESHOLD=""
+    MOTION_MIN_DURATION=$(bashio::config 'motion_min_duration') || MOTION_MIN_DURATION=""
+    RECORDING_PRE_ROLL=$(bashio::config 'recording_pre_roll') || RECORDING_PRE_ROLL=""
+    RECORDING_POST_ROLL=$(bashio::config 'recording_post_roll') || RECORDING_POST_ROLL=""
+    RECORDINGS_PATH=$(bashio::config 'recordings_path') || RECORDINGS_PATH=""
+    MAX_RECORDINGS=$(bashio::config 'max_recordings') || MAX_RECORDINGS=""
+    LOG_LEVEL=$(bashio::config 'log_level') || LOG_LEVEL=""
 
     echo "[INFO] Config read complete"
 else
