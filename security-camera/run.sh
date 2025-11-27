@@ -5,28 +5,37 @@
 
 set -e
 
+echo "[INFO] Starting Security Camera Motion Detection Add-on..."
+echo "[INFO] Checking environment..."
+
 # Read configuration from Home Assistant
-if command -v bashio &> /dev/null; then
-    # Running as HA add-on
-    STREAM_URL=$(bashio::config 'stream_url')
-    MOTION_THRESHOLD=$(bashio::config 'motion_threshold')
-    MOTION_MIN_DURATION=$(bashio::config 'motion_min_duration')
-    RECORDING_PRE_ROLL=$(bashio::config 'recording_pre_roll')
-    RECORDING_POST_ROLL=$(bashio::config 'recording_post_roll')
-    RECORDINGS_PATH=$(bashio::config 'recordings_path')
-    MAX_RECORDINGS=$(bashio::config 'max_recordings')
-    LOG_LEVEL=$(bashio::config 'log_level')
+if command -v bashio &> /dev/null && bashio::supervisor.ping 2>/dev/null; then
+    echo "[INFO] Running as Home Assistant add-on"
+    echo "[INFO] Reading configuration from Supervisor API..."
+
+    STREAM_URL=$(bashio::config 'stream_url' 2>/dev/null) || STREAM_URL=""
+    MOTION_THRESHOLD=$(bashio::config 'motion_threshold' 2>/dev/null) || MOTION_THRESHOLD=""
+    MOTION_MIN_DURATION=$(bashio::config 'motion_min_duration' 2>/dev/null) || MOTION_MIN_DURATION=""
+    RECORDING_PRE_ROLL=$(bashio::config 'recording_pre_roll' 2>/dev/null) || RECORDING_PRE_ROLL=""
+    RECORDING_POST_ROLL=$(bashio::config 'recording_post_roll' 2>/dev/null) || RECORDING_POST_ROLL=""
+    RECORDINGS_PATH=$(bashio::config 'recordings_path' 2>/dev/null) || RECORDINGS_PATH=""
+    MAX_RECORDINGS=$(bashio::config 'max_recordings' 2>/dev/null) || MAX_RECORDINGS=""
+    LOG_LEVEL=$(bashio::config 'log_level' 2>/dev/null) || LOG_LEVEL=""
+
+    echo "[INFO] Config read complete"
 else
-    # Running in local test mode - use environment variables
-    STREAM_URL="${STREAM_URL:-http://localhost:8080/stream.m3u8}"
-    MOTION_THRESHOLD="${MOTION_THRESHOLD:-5000}"
-    MOTION_MIN_DURATION="${MOTION_MIN_DURATION:-3}"
-    RECORDING_PRE_ROLL="${RECORDING_PRE_ROLL:-6}"
-    RECORDING_POST_ROLL="${RECORDING_POST_ROLL:-5}"
-    RECORDINGS_PATH="${RECORDINGS_PATH:-/share/security_recordings}"
-    MAX_RECORDINGS="${MAX_RECORDINGS:-50}"
-    LOG_LEVEL="${LOG_LEVEL:-info}"
+    echo "[INFO] Running in local/standalone mode"
 fi
+
+# Apply defaults for any missing values
+STREAM_URL="${STREAM_URL:-http://localhost:8080/stream.m3u8}"
+MOTION_THRESHOLD="${MOTION_THRESHOLD:-5000}"
+MOTION_MIN_DURATION="${MOTION_MIN_DURATION:-3}"
+RECORDING_PRE_ROLL="${RECORDING_PRE_ROLL:-6}"
+RECORDING_POST_ROLL="${RECORDING_POST_ROLL:-5}"
+RECORDINGS_PATH="${RECORDINGS_PATH:-/share/security_recordings}"
+MAX_RECORDINGS="${MAX_RECORDINGS:-50}"
+LOG_LEVEL="${LOG_LEVEL:-info}"
 
 # Export for Python scripts
 export STREAM_URL
