@@ -108,10 +108,12 @@ INDEX_HTML = '''<!DOCTYPE html>
             left: 0;
             width: 100%;
             height: 100%;
+            object-fit: cover;
             opacity: 0;
             pointer-events: none;
+            z-index: 2;
         }
-        .card-thumb:hover .screenshot-preview.active {
+        .card-thumb .screenshot-preview.active {
             opacity: 1;
         }
         .card-thumb:hover .screenshot-preview.active ~ .main-thumb,
@@ -157,8 +159,11 @@ INDEX_HTML = '''<!DOCTYPE html>
             justify-content: center;
             opacity: 0;
             transition: opacity 0.2s;
+            z-index: 5;
         }
         .card:hover .play-icon { opacity: 1; }
+        .card-thumb.previewing .play-icon { opacity: 0 !important; }
+        .card-thumb.previewing .main-thumb { opacity: 0; }
         .play-icon::after {
             content: '';
             border-style: solid;
@@ -578,23 +583,29 @@ INDEX_HTML = '''<!DOCTYPE html>
 
             if (screenshots.length <= 1) return;
 
+            // Add previewing class to hide play icon
+            thumbEl.classList.add('previewing');
+
             let currentIdx = 0;
             const previewImgs = thumbEl.querySelectorAll('.screenshot-preview');
             const segments = thumbEl.querySelectorAll('.segment');
 
-            // Show first screenshot
+            // Show first screenshot immediately
             updatePreview(previewImgs, segments, currentIdx);
 
             // Cycle through screenshots
             const interval = setInterval(() => {
                 currentIdx = (currentIdx + 1) % screenshots.length;
                 updatePreview(previewImgs, segments, currentIdx);
-            }, 800); // 800ms per screenshot for smooth preview
+            }, 600); // 600ms per screenshot for smooth preview
 
             previewIntervals.set(thumbEl, interval);
         }
 
         function stopPreview(thumbEl) {
+            // Remove previewing class to show play icon again
+            thumbEl.classList.remove('previewing');
+
             const interval = previewIntervals.get(thumbEl);
             if (interval) {
                 clearInterval(interval);
