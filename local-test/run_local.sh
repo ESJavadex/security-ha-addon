@@ -12,6 +12,10 @@ RECORDING_POST_ROLL="${RECORDING_POST_ROLL:-5}"
 RECORDINGS_PATH="${RECORDINGS_PATH:-/share/security_recordings}"
 MAX_RECORDINGS="${MAX_RECORDINGS:-50}"
 LOG_LEVEL="${LOG_LEVEL:-debug}"
+ROI_X_START="${ROI_X_START:-33}"
+ROI_X_END="${ROI_X_END:-66}"
+ROI_Y_START="${ROI_Y_START:-5}"
+ROI_Y_END="${ROI_Y_END:-95}"
 
 # Export for Python scripts
 export STREAM_URL
@@ -22,7 +26,12 @@ export RECORDING_POST_ROLL
 export RECORDINGS_PATH
 export MAX_RECORDINGS
 export LOG_LEVEL
+export ROI_X_START
+export ROI_X_END
+export ROI_Y_START
+export ROI_Y_END
 export STATE_FILE="/share/security_state.json"
+export SETTINGS_FILE="/share/security_settings.json"
 export HTTP_PORT=8081
 
 # Create directories
@@ -34,11 +43,14 @@ echo "========================================"
 echo "Stream URL: $STREAM_URL"
 echo "Motion threshold: $MOTION_THRESHOLD"
 echo "Min duration: ${MOTION_MIN_DURATION}s"
+echo "ROI: ${ROI_X_START}% - ${ROI_X_END}%"
 echo "Pre-roll: ${RECORDING_PRE_ROLL}s"
 echo "Post-roll: ${RECORDING_POST_ROLL}s"
 echo "Recordings path: $RECORDINGS_PATH"
 echo "Max recordings: $MAX_RECORDINGS"
 echo "Log level: $LOG_LEVEL"
+echo ""
+echo "Live settings: curl -X POST localhost:8081/api/settings/roi/33/66"
 echo "========================================"
 
 # Start HTTP server in background
@@ -88,6 +100,11 @@ post_roll = int(os.environ['RECORDING_POST_ROLL'])
 recordings_path = os.environ['RECORDINGS_PATH']
 max_recordings = int(os.environ['MAX_RECORDINGS'])
 state_file = os.environ['STATE_FILE']
+settings_file = os.environ.get('SETTINGS_FILE', '/share/security_settings.json')
+roi_x_start = int(os.environ.get('ROI_X_START', 33))
+roi_x_end = int(os.environ.get('ROI_X_END', 66))
+roi_y_start = int(os.environ.get('ROI_Y_START', 5))
+roi_y_end = int(os.environ.get('ROI_Y_END', 95))
 
 # Initialize components
 ha = HAIntegration(state_file=state_file, update_interval=1.0)
@@ -120,6 +137,11 @@ detector = MotionDetector(
     motion_threshold=motion_threshold,
     min_duration=min_duration,
     check_interval=1.0,
+    roi_x_start=roi_x_start,
+    roi_x_end=roi_x_end,
+    roi_y_start=roi_y_start,
+    roi_y_end=roi_y_end,
+    settings_file=settings_file,
     on_motion_start=on_motion_start,
     on_motion_end=on_motion_end,
     on_motion_frame=on_motion_frame

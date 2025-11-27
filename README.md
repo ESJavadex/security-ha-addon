@@ -31,16 +31,69 @@ See [local-test/README.md](local-test/README.md)
 
 ## Configuration
 
+All options are configurable via the Home Assistant add-on Configuration tab.
+
 | Option | Default | Description |
 |--------|---------|-------------|
 | `stream_url` | - | HLS stream URL (m3u8) |
 | `motion_threshold` | 5000 | Pixel area to trigger motion (lower = more sensitive) |
 | `motion_min_duration` | 3 | Seconds motion must persist before triggering |
+| `roi_x_start` | 33 | Detection zone left edge (0-100%) |
+| `roi_x_end` | 66 | Detection zone right edge (0-100%) |
+| `roi_y_start` | 5 | Detection zone top edge (0-100%) |
+| `roi_y_end` | 95 | Detection zone bottom edge (0-100%) |
 | `recording_pre_roll` | 6 | Seconds to capture before motion |
 | `recording_post_roll` | 5 | Seconds to capture after motion ends |
 | `recordings_path` | /share/security_recordings | Where to save recordings |
 | `max_recordings` | 50 | Maximum recordings to keep |
 | `log_level` | info | Logging level (debug/info/warning/error) |
+
+## Detection Zone (ROI)
+
+The ROI (Region of Interest) limits motion detection to a specific area of the frame. This helps ignore:
+- **Timestamp overlays** (constantly changing time)
+- **Camera logos/watermarks**
+- **Edge noise** from lighting changes
+
+**Recordings are always full-frame** - ROI only affects detection.
+
+```
+  0%                               100%
+   ┌─────────────────────────────────┐  0%
+   │ [timestamp - ignored]           │
+   │─────────────────────────────────│  roi_y_start (5%)
+   │    │                      │     │
+   │    │   DETECTION ZONE     │     │
+   │    │                      │     │
+   │─────────────────────────────────│  roi_y_end (95%)
+   │ [logo - ignored]                │
+   └─────────────────────────────────┘  100%
+        ↑                      ↑
+   roi_x_start (33%)    roi_x_end (66%)
+```
+
+### Live Adjustment API
+
+Adjust detection zone without restarting the add-on:
+
+```bash
+# Get current settings
+curl http://<HA_IP>:8081/api/settings
+
+# Set horizontal zone (X axis)
+curl -X POST http://<HA_IP>:8081/api/settings/roi/20/80
+
+# Set vertical zone (Y axis) - crop timestamp/logo
+curl -X POST http://<HA_IP>:8081/api/settings/roi_y/10/90
+
+# Set motion threshold
+curl -X POST http://<HA_IP>:8081/api/settings/threshold/3000
+
+# Set all at once
+curl -X POST http://<HA_IP>:8081/api/settings \
+  -H "Content-Type: application/json" \
+  -d '{"roi_x_start":33, "roi_x_end":66, "roi_y_start":10, "roi_y_end":90}'
+```
 
 ## Home Assistant Integration
 
@@ -78,13 +131,18 @@ automation:
 
 ## API Endpoints
 
-| Endpoint | Description |
-|----------|-------------|
-| `GET /api/health` | Health check |
-| `GET /api/state` | Current motion/recording state |
-| `GET /api/recordings` | List all recordings |
-| `GET /<filename>.mp4` | Download recording |
-| `GET /<filename>.jpg` | Download thumbnail |
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/health` | GET | Health check |
+| `/api/state` | GET | Current motion/recording state |
+| `/api/recordings` | GET | List all recordings |
+| `/api/settings` | GET | Current ROI and threshold settings |
+| `/api/settings` | POST | Update settings (JSON body) |
+| `/api/settings/roi/{x1}/{x2}` | POST | Set X axis detection zone |
+| `/api/settings/roi_y/{y1}/{y2}` | POST | Set Y axis detection zone |
+| `/api/settings/threshold/{value}` | POST | Set motion threshold |
+| `/<filename>.mp4` | GET | Download recording |
+| `/<filename>.jpg` | GET | Download thumbnail |
 
 ## Architecture
 
