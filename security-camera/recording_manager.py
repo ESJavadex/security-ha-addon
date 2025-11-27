@@ -28,6 +28,7 @@ class Recording:
     duration: Optional[float] = None
     filesize: Optional[int] = None
     thumbnail: Optional[str] = None
+    screenshots: Optional[List[str]] = None  # List of screenshot filenames
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -110,24 +111,91 @@ class RecordingManager:
         return f"motion_{timestamp}.mp4"
 
     def _generate_thumbnail(self, video_path: Path) -> Optional[str]:
-        """Generate a thumbnail from the video."""
-        thumbnail_path = video_path.with_suffix('.jpg')
+        """Generate a thumbnail from the video (legacy, returns first screenshot)."""
+        screenshots = self._generate_screenshots(video_path)
+        if screenshots:
+            return screenshots[0]
+        return None
+
+    def _generate_screenshots(self, video_path: Path, interval: int = 5) -> List[str]:
+        """
+        Generate multiple screenshots from the video at regular intervals.
+
+        Args:
+            video_path: Path to the video file
+            interval: Seconds between screenshots (default 5)
+
+        Returns:
+            List of screenshot file paths
+        """
+        screenshots = []
+        base_name = video_path.stem  # e.g., "motion_20241127_143022"
+
+        # Get video duration using ffprobe
         try:
-            cmd = [
-                'ffmpeg',
-                '-i', str(video_path),
-                '-ss', '00:00:01',  # 1 second into video
-                '-vframes', '1',
-                '-vf', 'scale=320:-1',  # 320px width, preserve aspect
-                '-y',
-                '-loglevel', 'error',
-                str(thumbnail_path)
+            probe_cmd = [
+                'ffprobe',
+                '-v', 'error',
+                '-show_entries', 'format=duration',
+                '-of', 'default=noprint_wrappers=1:nokey=1',
+                str(video_path)
             ]
-            subprocess.run(cmd, timeout=30, check=True)
-            return str(thumbnail_path)
+            result = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=30)
+            duration = float(result.stdout.strip())
         except Exception as e:
-            logger.error(f"Error generating thumbnail: {e}")
-            return None
+            logger.warning(f"Could not get video duration: {e}, using 30s fallback")
+            duration = 30.0
+
+        # Generate screenshots at intervals
+        timestamp = 1  # Start at 1 second
+        index = 0
+
+        while timestamp < duration:
+            screenshot_name = f"{base_name}_{index:03d}.jpg"
+            screenshot_path = video_path.parent / screenshot_name
+
+            try:
+                cmd = [
+                    'ffmpeg',
+                    '-i', str(video_path),
+                    '-ss', str(timestamp),
+                    '-vframes', '1',
+                    '-vf', 'scale=320:-1',  # 320px width, preserve aspect
+                    '-y',
+                    '-loglevel', 'error',
+                    str(screenshot_path)
+                ]
+                subprocess.run(cmd, timeout=30, check=True)
+                screenshots.append(screenshot_name)
+                logger.debug(f"Generated screenshot: {screenshot_name} at {timestamp}s")
+            except Exception as e:
+                logger.error(f"Error generating screenshot at {timestamp}s: {e}")
+
+            timestamp += interval
+            index += 1
+
+        # If no screenshots were generated, try at least one at 1 second
+        if not screenshots:
+            screenshot_name = f"{base_name}_000.jpg"
+            screenshot_path = video_path.parent / screenshot_name
+            try:
+                cmd = [
+                    'ffmpeg',
+                    '-i', str(video_path),
+                    '-ss', '00:00:01',
+                    '-vframes', '1',
+                    '-vf', 'scale=320:-1',
+                    '-y',
+                    '-loglevel', 'error',
+                    str(screenshot_path)
+                ]
+                subprocess.run(cmd, timeout=30, check=True)
+                screenshots.append(screenshot_name)
+            except Exception as e:
+                logger.error(f"Error generating fallback screenshot: {e}")
+
+        logger.info(f"Generated {len(screenshots)} screenshots for {video_path.name}")
+        return screenshots
 
     def _cleanup_old_recordings(self):
         """Remove old recordings if exceeding max_recordings."""
@@ -146,8 +214,14 @@ class RecordingManager:
                 if video_path.exists():
                     video_path.unlink()
 
-                # Delete thumbnail
-                if recording.thumbnail:
+                # Delete all screenshots
+                if recording.screenshots:
+                    for screenshot in recording.screenshots:
+                        screenshot_path = video_path.parent / screenshot
+                        if screenshot_path.exists():
+                            screenshot_path.unlink()
+                elif recording.thumbnail:
+                    # Fallback for old recordings with single thumbnail
                     thumb_path = Path(recording.thumbnail)
                     if thumb_path.exists():
                         thumb_path.unlink()
@@ -262,8 +336,12 @@ class RecordingManager:
                 if filepath.exists():
                     self._current_recording.filesize = filepath.stat().st_size
 
-                    # Generate thumbnail
-                    self._current_recording.thumbnail = self._generate_thumbnail(filepath)
+                    # Generate screenshots (every 5 seconds)
+                    screenshots = self._generate_screenshots(filepath)
+                    self._current_recording.screenshots = screenshots
+                    # First screenshot is the thumbnail for backwards compatibility
+                    if screenshots:
+                        self._current_recording.thumbnail = str(filepath.parent / screenshots[0])
 
                     self._recordings.append(self._current_recording)
                     self._save_metadata()

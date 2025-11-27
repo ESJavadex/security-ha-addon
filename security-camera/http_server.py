@@ -100,6 +100,48 @@ INDEX_HTML = '''<!DOCTYPE html>
             width: 100%;
             height: 100%;
             object-fit: cover;
+            transition: opacity 0.15s ease;
+        }
+        .card-thumb .screenshot-preview {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            opacity: 0;
+            pointer-events: none;
+        }
+        .card-thumb:hover .screenshot-preview.active {
+            opacity: 1;
+        }
+        .card-thumb:hover .screenshot-preview.active ~ .main-thumb,
+        .card-thumb:hover .main-thumb:first-child {
+            opacity: 0;
+        }
+        .screenshot-progress {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            height: 3px;
+            background: rgba(0,0,0,0.5);
+            display: flex;
+            gap: 2px;
+            padding: 0 2px;
+            opacity: 0;
+            transition: opacity 0.2s;
+        }
+        .card-thumb:hover .screenshot-progress {
+            opacity: 1;
+        }
+        .screenshot-progress .segment {
+            flex: 1;
+            height: 100%;
+            background: rgba(255,255,255,0.3);
+            transition: background 0.1s;
+        }
+        .screenshot-progress .segment.active {
+            background: #4ade80;
         }
         .card-thumb .play-icon {
             position: absolute;
@@ -487,14 +529,28 @@ INDEX_HTML = '''<!DOCTYPE html>
 
             grid.innerHTML = filteredRecordings.map((r, i) => {
                 const thumbName = r.thumbnail ? r.thumbnail.split('/').pop() : r.filename.replace('.mp4', '.jpg');
+                const screenshots = r.screenshots || [thumbName];
                 const isFav = r.favorite || false;
+
+                // Build screenshot preview images
+                const screenshotImgs = screenshots.map((s, idx) =>
+                    `<img class="screenshot-preview" data-idx="${idx}" src="/${s}" alt="Preview ${idx + 1}">`
+                ).join('');
+
+                // Build progress segments
+                const progressSegments = screenshots.map((_, idx) =>
+                    `<div class="segment" data-idx="${idx}"></div>`
+                ).join('');
+
                 return `
                     <div class="card">
-                        <div class="card-thumb" onclick="openModal(${i})">
-                            <img src="/${thumbName}" alt="Thumbnail" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 320 180%22><rect fill=%22%23333%22 width=%22320%22 height=%22180%22/><text x=%22160%22 y=%2290%22 fill=%22%23666%22 text-anchor=%22middle%22>No preview</text></svg>'">
+                        <div class="card-thumb" data-index="${i}" onclick="openModal(${i})" onmouseenter="startPreview(this)" onmouseleave="stopPreview(this)">
+                            <img class="main-thumb" src="/${thumbName}" alt="Thumbnail" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 320 180%22><rect fill=%22%23333%22 width=%22320%22 height=%22180%22/><text x=%22160%22 y=%2290%22 fill=%22%23666%22 text-anchor=%22middle%22>No preview</text></svg>'">
+                            ${screenshotImgs}
                             ${isFav ? '<div class="favorite-badge">★</div>' : ''}
                             <div class="play-icon"></div>
                             <div class="duration">${formatDuration(r.duration)}</div>
+                            ${screenshots.length > 1 ? `<div class="screenshot-progress">${progressSegments}</div>` : ''}
                         </div>
                         <div class="card-info">
                             <div class="card-details" onclick="openModal(${i})">
@@ -510,6 +566,53 @@ INDEX_HTML = '''<!DOCTYPE html>
                     </div>
                 `;
             }).join('');
+        }
+
+        // Preview hover state
+        const previewIntervals = new Map();
+
+        function startPreview(thumbEl) {
+            const index = parseInt(thumbEl.dataset.index);
+            const r = filteredRecordings[index];
+            const screenshots = r.screenshots || [];
+
+            if (screenshots.length <= 1) return;
+
+            let currentIdx = 0;
+            const previewImgs = thumbEl.querySelectorAll('.screenshot-preview');
+            const segments = thumbEl.querySelectorAll('.segment');
+
+            // Show first screenshot
+            updatePreview(previewImgs, segments, currentIdx);
+
+            // Cycle through screenshots
+            const interval = setInterval(() => {
+                currentIdx = (currentIdx + 1) % screenshots.length;
+                updatePreview(previewImgs, segments, currentIdx);
+            }, 800); // 800ms per screenshot for smooth preview
+
+            previewIntervals.set(thumbEl, interval);
+        }
+
+        function stopPreview(thumbEl) {
+            const interval = previewIntervals.get(thumbEl);
+            if (interval) {
+                clearInterval(interval);
+                previewIntervals.delete(thumbEl);
+            }
+
+            // Reset all previews
+            thumbEl.querySelectorAll('.screenshot-preview').forEach(img => img.classList.remove('active'));
+            thumbEl.querySelectorAll('.segment').forEach(seg => seg.classList.remove('active'));
+        }
+
+        function updatePreview(previewImgs, segments, activeIdx) {
+            previewImgs.forEach((img, idx) => {
+                img.classList.toggle('active', idx === activeIdx);
+            });
+            segments.forEach((seg, idx) => {
+                seg.classList.toggle('active', idx === activeIdx);
+            });
         }
 
         function openModal(index) {
@@ -795,11 +898,19 @@ class SecurityHTTPHandler(SimpleHTTPRequestHandler):
                 video_path.unlink()
                 logger.info(f"Deleted video: {video_path}")
 
-            # Delete thumbnail
-            thumb_path = video_path.with_suffix('.jpg')
-            if thumb_path.exists():
-                thumb_path.unlink()
-                logger.info(f"Deleted thumbnail: {thumb_path}")
+            # Delete all screenshots
+            if recording_to_delete.get('screenshots'):
+                for screenshot in recording_to_delete['screenshots']:
+                    screenshot_path = Path(self.recordings_path) / screenshot
+                    if screenshot_path.exists():
+                        screenshot_path.unlink()
+                        logger.info(f"Deleted screenshot: {screenshot_path}")
+            else:
+                # Fallback for old recordings with single thumbnail
+                thumb_path = video_path.with_suffix('.jpg')
+                if thumb_path.exists():
+                    thumb_path.unlink()
+                    logger.info(f"Deleted thumbnail: {thumb_path}")
 
             # Update metadata
             recordings.remove(recording_to_delete)
