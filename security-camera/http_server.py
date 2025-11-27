@@ -133,10 +133,67 @@ INDEX_HTML = '''<!DOCTYPE html>
             border-radius: 4px;
             font-size: 0.8rem;
         }
-        .card-info { padding: 1rem; }
+        .card-info {
+            padding: 1rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+        }
+        .card-details { flex: 1; }
         .card-date { font-size: 1rem; font-weight: 500; }
         .card-time { font-size: 0.85rem; color: #aaa; margin-top: 0.25rem; }
         .card-size { font-size: 0.8rem; color: #666; margin-top: 0.5rem; }
+        .btn-delete {
+            background: transparent;
+            border: 1px solid #dc2626;
+            color: #dc2626;
+            padding: 0.4rem 0.6rem;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.8rem;
+            transition: all 0.2s;
+            opacity: 0;
+        }
+        .card:hover .btn-delete { opacity: 1; }
+        .btn-delete:hover {
+            background: #dc2626;
+            color: #fff;
+        }
+        .confirm-dialog {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.8);
+            z-index: 2000;
+            align-items: center;
+            justify-content: center;
+        }
+        .confirm-dialog.active { display: flex; }
+        .confirm-box {
+            background: #16213e;
+            padding: 2rem;
+            border-radius: 8px;
+            text-align: center;
+            max-width: 400px;
+            border: 1px solid #0f3460;
+        }
+        .confirm-box h3 { margin-bottom: 1rem; color: #ef4444; }
+        .confirm-box p { margin-bottom: 1.5rem; color: #aaa; }
+        .confirm-buttons { display: flex; gap: 1rem; justify-content: center; }
+        .confirm-buttons button {
+            padding: 0.6rem 1.5rem;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 1rem;
+            border: none;
+        }
+        .btn-cancel { background: #374151; color: #fff; }
+        .btn-cancel:hover { background: #4b5563; }
+        .btn-confirm-delete { background: #dc2626; color: #fff; }
+        .btn-confirm-delete:hover { background: #b91c1c; }
         .modal {
             display: none;
             position: fixed;
@@ -176,6 +233,22 @@ INDEX_HTML = '''<!DOCTYPE html>
             text-align: center;
             margin-top: 1rem;
         }
+        .modal-actions {
+            display: flex;
+            justify-content: center;
+            gap: 1rem;
+            margin-top: 1rem;
+        }
+        .modal-delete {
+            background: #dc2626;
+            border: none;
+            color: #fff;
+            padding: 0.5rem 1rem;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9rem;
+        }
+        .modal-delete:hover { background: #b91c1c; }
         .modal-nav {
             position: absolute;
             top: 50%;
@@ -249,6 +322,19 @@ INDEX_HTML = '''<!DOCTYPE html>
             <video id="player" controls></video>
             <button class="modal-nav next" onclick="navVideo(1)">&#8250;</button>
             <div class="modal-info" id="modalInfo"></div>
+            <div class="modal-actions">
+                <button class="modal-delete" onclick="confirmDeleteCurrent()">Delete Recording</button>
+            </div>
+        </div>
+    </div>
+    <div class="confirm-dialog" id="confirmDialog">
+        <div class="confirm-box">
+            <h3>Delete Recording?</h3>
+            <p id="confirmMessage">This will permanently delete the recording.</p>
+            <div class="confirm-buttons">
+                <button class="btn-cancel" onclick="cancelDelete()">Cancel</button>
+                <button class="btn-confirm-delete" onclick="executeDelete()">Delete</button>
+            </div>
         </div>
     </div>
     <script>
@@ -352,16 +438,19 @@ INDEX_HTML = '''<!DOCTYPE html>
             grid.innerHTML = filteredRecordings.map((r, i) => {
                 const thumbName = r.thumbnail ? r.thumbnail.split('/').pop() : r.filename.replace('.mp4', '.jpg');
                 return `
-                    <div class="card" onclick="openModal(${i})">
-                        <div class="card-thumb">
+                    <div class="card">
+                        <div class="card-thumb" onclick="openModal(${i})">
                             <img src="/${thumbName}" alt="Thumbnail" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 320 180%22><rect fill=%22%23333%22 width=%22320%22 height=%22180%22/><text x=%22160%22 y=%2290%22 fill=%22%23666%22 text-anchor=%22middle%22>No preview</text></svg>'">
                             <div class="play-icon"></div>
                             <div class="duration">${formatDuration(r.duration)}</div>
                         </div>
                         <div class="card-info">
-                            <div class="card-date">${formatDate(r.start_time)}</div>
-                            <div class="card-time">${formatTime(r.start_time)}</div>
-                            <div class="card-size">${formatSize(r.filesize)}</div>
+                            <div class="card-details" onclick="openModal(${i})">
+                                <div class="card-date">${formatDate(r.start_time)}</div>
+                                <div class="card-time">${formatTime(r.start_time)}</div>
+                                <div class="card-size">${formatSize(r.filesize)}</div>
+                            </div>
+                            <button class="btn-delete" onclick="confirmDelete('${r.filename}', event)">Delete</button>
                         </div>
                     </div>
                 `;
@@ -402,6 +491,42 @@ INDEX_HTML = '''<!DOCTYPE html>
         document.getElementById('filterDate').addEventListener('change', applyFilters);
         document.getElementById('filterSort').addEventListener('change', applyFilters);
 
+        let deleteFilename = null;
+
+        function confirmDelete(filename, event) {
+            if (event) event.stopPropagation();
+            deleteFilename = filename;
+            document.getElementById('confirmMessage').textContent = `This will permanently delete "${filename}"`;
+            document.getElementById('confirmDialog').classList.add('active');
+        }
+
+        function confirmDeleteCurrent() {
+            const r = filteredRecordings[currentIndex];
+            if (r) confirmDelete(r.filename);
+        }
+
+        function cancelDelete() {
+            deleteFilename = null;
+            document.getElementById('confirmDialog').classList.remove('active');
+        }
+
+        async function executeDelete() {
+            if (!deleteFilename) return;
+            try {
+                const res = await fetch(`/api/recordings/${deleteFilename}`, { method: 'DELETE' });
+                if (res.ok) {
+                    cancelDelete();
+                    closeModal();
+                    await loadRecordings();
+                } else {
+                    const err = await res.text();
+                    alert(`Failed to delete: ${err}`);
+                }
+            } catch (e) {
+                alert(`Error: ${e.message}`);
+            }
+        }
+
         loadRecordings();
         loadState();
         setInterval(loadState, 5000);
@@ -438,7 +563,7 @@ class SecurityHTTPHandler(SimpleHTTPRequestHandler):
     def send_cors_headers(self):
         """Add CORS headers for cross-origin requests."""
         self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+        self.send_header('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS')
         self.send_header('Access-Control-Allow-Headers', 'Content-Type')
         self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
 
@@ -484,6 +609,13 @@ class SecurityHTTPHandler(SimpleHTTPRequestHandler):
         else:
             self.send_error(404, "API endpoint not found")
 
+    def do_DELETE(self):
+        """Handle DELETE requests."""
+        if self.path.startswith('/api/recordings/'):
+            self.handle_api_delete_recording()
+        else:
+            self.send_error(404, "API endpoint not found")
+
     def end_headers(self):
         """Add CORS headers to all responses."""
         self.send_cors_headers()
@@ -522,6 +654,68 @@ class SecurityHTTPHandler(SimpleHTTPRequestHandler):
             self.wfile.write(json.dumps(recordings, indent=2).encode())
 
         except Exception as e:
+            self.send_error(500, str(e))
+
+    def handle_api_delete_recording(self):
+        """Delete a recording by filename: DELETE /api/recordings/{filename}"""
+        try:
+            # Extract filename from path
+            parts = self.path.split('/')
+            if len(parts) < 4:
+                self.send_error(400, "Filename required")
+                return
+
+            filename = parts[3]
+            if not filename.endswith('.mp4'):
+                self.send_error(400, "Invalid filename")
+                return
+
+            # Load metadata
+            metadata_file = Path(self.recordings_path) / "recordings.json"
+            if not metadata_file.exists():
+                self.send_error(404, "No recordings found")
+                return
+
+            with open(metadata_file, 'r') as f:
+                recordings = json.load(f)
+
+            # Find and remove the recording
+            recording_to_delete = None
+            for r in recordings:
+                if r.get('filename') == filename:
+                    recording_to_delete = r
+                    break
+
+            if not recording_to_delete:
+                self.send_error(404, f"Recording not found: {filename}")
+                return
+
+            # Delete video file
+            video_path = Path(self.recordings_path) / filename
+            if video_path.exists():
+                video_path.unlink()
+                logger.info(f"Deleted video: {video_path}")
+
+            # Delete thumbnail
+            thumb_path = video_path.with_suffix('.jpg')
+            if thumb_path.exists():
+                thumb_path.unlink()
+                logger.info(f"Deleted thumbnail: {thumb_path}")
+
+            # Update metadata
+            recordings.remove(recording_to_delete)
+            with open(metadata_file, 'w') as f:
+                json.dump(recordings, f, indent=2)
+
+            logger.info(f"Recording deleted: {filename}")
+
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({"status": "ok", "deleted": filename}).encode())
+
+        except Exception as e:
+            logger.error(f"Error deleting recording: {e}")
             self.send_error(500, str(e))
 
     def handle_api_health(self):
