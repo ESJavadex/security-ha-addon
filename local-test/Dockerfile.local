@@ -1,0 +1,35 @@
+# Local test Dockerfile (not for HA add-on)
+FROM python:3.11-slim
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    libgl1 \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python packages
+RUN pip install --no-cache-dir \
+    opencv-python-headless \
+    numpy \
+    requests \
+    watchdog
+
+# Create directories
+RUN mkdir -p /app /share/security_recordings
+
+# Copy application files
+COPY motion_detector.py /app/
+COPY recording_manager.py /app/
+COPY ha_integration.py /app/
+COPY http_server.py /app/
+COPY run_local.sh /app/run.sh
+
+RUN chmod +x /app/run.sh
+
+WORKDIR /app
+
+CMD ["/app/run.sh"]

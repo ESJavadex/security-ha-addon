@@ -1,0 +1,345 @@
+#!/usr/bin/env python3
+"""
+Recording manager for motion-triggered video clips.
+Captures video from HLS stream when motion is detected.
+"""
+
+import os
+import subprocess
+import time
+import threading
+import logging
+import json
+from datetime import datetime
+from pathlib import Path
+from typing import Optional, List
+from dataclasses import dataclass, asdict
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class Recording:
+    """Represents a recorded video clip."""
+    filename: str
+    filepath: str
+    start_time: float
+    end_time: Optional[float] = None
+    duration: Optional[float] = None
+    filesize: Optional[int] = None
+    thumbnail: Optional[str] = None
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+class RecordingManager:
+    """
+    Manages video recording when motion is detected.
+
+    Features:
+    - Pre-roll: captures X seconds before motion was triggered
+    - Post-roll: continues recording X seconds after motion ends
+    - Automatic cleanup of old recordings
+    - Recording metadata stored in JSON
+    """
+
+    def __init__(
+        self,
+        stream_url: str,
+        recordings_path: str = "/share/security_recordings",
+        pre_roll: int = 6,
+        post_roll: int = 5,
+        max_recordings: int = 50,
+        max_duration: int = 300,  # 5 minutes max per clip
+    ):
+        """
+        Initialize recording manager.
+
+        Args:
+            stream_url: HLS stream URL
+            recordings_path: Directory to save recordings
+            pre_roll: Seconds to capture before motion trigger
+            post_roll: Seconds to continue after motion ends
+            max_recordings: Maximum recordings to keep
+            max_duration: Maximum recording duration in seconds
+        """
+        self.stream_url = stream_url
+        self.recordings_path = Path(recordings_path)
+        self.pre_roll = pre_roll
+        self.post_roll = post_roll
+        self.max_recordings = max_recordings
+        self.max_duration = max_duration
+
+        # State
+        self._recording = False
+        self._current_recording: Optional[Recording] = None
+        self._ffmpeg_process: Optional[subprocess.Popen] = None
+        self._stop_timer: Optional[threading.Timer] = None
+        self._lock = threading.Lock()
+
+        # Create recordings directory
+        self.recordings_path.mkdir(parents=True, exist_ok=True)
+
+        # Metadata file
+        self.metadata_file = self.recordings_path / "recordings.json"
+        self._recordings: List[Recording] = self._load_metadata()
+
+    def _load_metadata(self) -> List[Recording]:
+        """Load recording metadata from JSON file."""
+        if self.metadata_file.exists():
+            try:
+                with open(self.metadata_file, 'r') as f:
+                    data = json.load(f)
+                    return [Recording(**r) for r in data]
+            except Exception as e:
+                logger.error(f"Error loading metadata: {e}")
+        return []
+
+    def _save_metadata(self):
+        """Save recording metadata to JSON file."""
+        try:
+            with open(self.metadata_file, 'w') as f:
+                json.dump([r.to_dict() for r in self._recordings], f, indent=2)
+        except Exception as e:
+            logger.error(f"Error saving metadata: {e}")
+
+    def _generate_filename(self) -> str:
+        """Generate a unique filename for the recording."""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        return f"motion_{timestamp}.mp4"
+
+    def _generate_thumbnail(self, video_path: Path) -> Optional[str]:
+        """Generate a thumbnail from the video."""
+        thumbnail_path = video_path.with_suffix('.jpg')
+        try:
+            cmd = [
+                'ffmpeg',
+                '-i', str(video_path),
+                '-ss', '00:00:01',  # 1 second into video
+                '-vframes', '1',
+                '-vf', 'scale=320:-1',  # 320px width, preserve aspect
+                '-y',
+                '-loglevel', 'error',
+                str(thumbnail_path)
+            ]
+            subprocess.run(cmd, timeout=30, check=True)
+            return str(thumbnail_path)
+        except Exception as e:
+            logger.error(f"Error generating thumbnail: {e}")
+            return None
+
+    def _cleanup_old_recordings(self):
+        """Remove old recordings if exceeding max_recordings."""
+        if len(self._recordings) <= self.max_recordings:
+            return
+
+        # Sort by start_time, oldest first
+        sorted_recordings = sorted(self._recordings, key=lambda r: r.start_time)
+
+        # Remove oldest recordings
+        to_remove = len(self._recordings) - self.max_recordings
+        for recording in sorted_recordings[:to_remove]:
+            try:
+                # Delete video file
+                video_path = Path(recording.filepath)
+                if video_path.exists():
+                    video_path.unlink()
+
+                # Delete thumbnail
+                if recording.thumbnail:
+                    thumb_path = Path(recording.thumbnail)
+                    if thumb_path.exists():
+                        thumb_path.unlink()
+
+                self._recordings.remove(recording)
+                logger.info(f"Removed old recording: {recording.filename}")
+
+            except Exception as e:
+                logger.error(f"Error removing recording {recording.filename}: {e}")
+
+        self._save_metadata()
+
+    def start_recording(self, motion_start_time: Optional[float] = None):
+        """
+        Start recording video from stream.
+
+        Args:
+            motion_start_time: Timestamp when motion was first detected (for pre-roll)
+        """
+        with self._lock:
+            if self._recording:
+                logger.warning("Recording already in progress")
+                # Cancel any pending stop
+                if self._stop_timer:
+                    self._stop_timer.cancel()
+                    self._stop_timer = None
+                return
+
+            self._recording = True
+
+            filename = self._generate_filename()
+            filepath = self.recordings_path / filename
+
+            self._current_recording = Recording(
+                filename=filename,
+                filepath=str(filepath),
+                start_time=motion_start_time or time.time()
+            )
+
+            logger.info(f"Starting recording: {filename}")
+
+            # Start ffmpeg to record stream
+            cmd = [
+                'ffmpeg',
+                '-i', self.stream_url,
+                '-c', 'copy',  # Copy codec, no transcoding
+                '-movflags', '+faststart',  # Enable streaming
+                '-t', str(self.max_duration),  # Max duration
+                '-y',  # Overwrite
+                '-loglevel', 'error',
+                str(filepath)
+            ]
+
+            try:
+                self._ffmpeg_process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE
+                )
+                logger.debug(f"ffmpeg started with PID {self._ffmpeg_process.pid}")
+            except Exception as e:
+                logger.error(f"Error starting ffmpeg: {e}")
+                self._recording = False
+                self._current_recording = None
+
+    def extend_recording(self):
+        """Extend recording by canceling any pending stop."""
+        with self._lock:
+            if self._stop_timer:
+                self._stop_timer.cancel()
+                self._stop_timer = None
+                logger.debug("Recording extended, stop timer canceled")
+
+    def schedule_stop(self):
+        """Schedule recording to stop after post_roll seconds."""
+        with self._lock:
+            if not self._recording:
+                return
+
+            if self._stop_timer:
+                self._stop_timer.cancel()
+
+            logger.info(f"Motion ended, stopping recording in {self.post_roll}s")
+            self._stop_timer = threading.Timer(self.post_roll, self._stop_recording)
+            self._stop_timer.start()
+
+    def _stop_recording(self):
+        """Stop the current recording."""
+        with self._lock:
+            if not self._recording:
+                return
+
+            self._recording = False
+
+            if self._ffmpeg_process:
+                # Send SIGINT to ffmpeg for clean shutdown
+                self._ffmpeg_process.terminate()
+                try:
+                    self._ffmpeg_process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    self._ffmpeg_process.kill()
+                self._ffmpeg_process = None
+
+            if self._current_recording:
+                self._current_recording.end_time = time.time()
+                self._current_recording.duration = (
+                    self._current_recording.end_time - self._current_recording.start_time
+                )
+
+                # Get file size
+                filepath = Path(self._current_recording.filepath)
+                if filepath.exists():
+                    self._current_recording.filesize = filepath.stat().st_size
+
+                    # Generate thumbnail
+                    self._current_recording.thumbnail = self._generate_thumbnail(filepath)
+
+                    self._recordings.append(self._current_recording)
+                    self._save_metadata()
+
+                    logger.info(
+                        f"Recording saved: {self._current_recording.filename} "
+                        f"({self._current_recording.duration:.1f}s, "
+                        f"{self._current_recording.filesize / 1024 / 1024:.1f}MB)"
+                    )
+                else:
+                    logger.error(f"Recording file not found: {filepath}")
+
+                self._current_recording = None
+
+            # Cleanup old recordings
+            self._cleanup_old_recordings()
+
+    def stop_recording_immediate(self):
+        """Stop recording immediately without post-roll."""
+        with self._lock:
+            if self._stop_timer:
+                self._stop_timer.cancel()
+                self._stop_timer = None
+
+        self._stop_recording()
+
+    @property
+    def is_recording(self) -> bool:
+        """Check if currently recording."""
+        return self._recording
+
+    def get_recordings(self) -> List[Recording]:
+        """Get list of all recordings."""
+        return self._recordings.copy()
+
+    def get_latest_recording(self) -> Optional[Recording]:
+        """Get the most recent recording."""
+        if self._recordings:
+            return max(self._recordings, key=lambda r: r.start_time)
+        return None
+
+    def get_stats(self) -> dict:
+        """Get recording statistics."""
+        total_size = sum(r.filesize or 0 for r in self._recordings)
+        return {
+            "is_recording": self._recording,
+            "total_recordings": len(self._recordings),
+            "total_size_mb": total_size / 1024 / 1024,
+            "latest_recording": self.get_latest_recording().filename if self.get_latest_recording() else None
+        }
+
+
+# For standalone testing
+if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+
+    manager = RecordingManager(
+        stream_url="http://192.168.1.156:8080/stream.m3u8",
+        recordings_path="./test_recordings",
+        pre_roll=6,
+        post_roll=5,
+        max_recordings=10
+    )
+
+    print("Starting test recording...")
+    manager.start_recording()
+
+    time.sleep(10)
+
+    print("Scheduling stop...")
+    manager.schedule_stop()
+
+    time.sleep(10)
+
+    stats = manager.get_stats()
+    print(f"Stats: {stats}")
