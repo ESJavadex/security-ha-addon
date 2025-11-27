@@ -63,18 +63,71 @@ Environment variables (local) or config.yaml options (HA):
 | STREAM_URL | - | HLS stream URL (m3u8) |
 | MOTION_THRESHOLD | 5000 | Pixel area to trigger (lower = more sensitive) |
 | MOTION_MIN_DURATION | 3 | Seconds motion must persist |
+| ROI_X_START | 33 | Detection zone left edge (0-100%) |
+| ROI_X_END | 66 | Detection zone right edge (0-100%) |
+| ROI_Y_START | 5 | Detection zone top edge (0-100%) |
+| ROI_Y_END | 95 | Detection zone bottom edge (0-100%) |
 | RECORDING_PRE_ROLL | 6 | Seconds before motion |
 | RECORDING_POST_ROLL | 5 | Seconds after motion ends |
 | MAX_RECORDINGS | 50 | Auto-cleanup threshold |
 | LOG_LEVEL | info (HA) / debug (local) | debug/info/warning/error |
+
+## Detection Zone (ROI)
+
+The ROI (Region of Interest) defines where motion is detected. Recordings are always full-frame.
+
+```
+  0%                               100%
+   ┌─────────────────────────────────┐  0%
+   │ [timestamp - ignored]           │
+   │─────────────────────────────────│  roi_y_start (5%)
+   │    │                      │     │
+   │    │   DETECTION ZONE     │     │
+   │    │                      │     │
+   │─────────────────────────────────│  roi_y_end (95%)
+   │ [logo - ignored]                │
+   └─────────────────────────────────┘  100%
+        ↑                      ↑
+   roi_x_start (33%)    roi_x_end (66%)
+```
+
+**Default:** Middle third horizontally (33-66%), full height minus edges (5-95%)
 
 ## API Endpoints
 
 - `GET /api/health` - Health check
 - `GET /api/state` - Motion/recording state JSON
 - `GET /api/recordings` - List recordings
+- `GET /api/settings` - Current ROI and threshold settings
+- `POST /api/settings` - Update settings (JSON body)
+- `POST /api/settings/roi/{x1}/{x2}` - Quick set X axis ROI
+- `POST /api/settings/roi_y/{y1}/{y2}` - Quick set Y axis ROI
+- `POST /api/settings/threshold/{value}` - Quick set threshold
 - `GET /<file>.mp4` - Download recording
 - `GET /<file>.jpg` - Download thumbnail
+
+### Live Settings API
+
+Adjust detection zone without restart:
+
+```bash
+# Get current settings
+curl localhost:8081/api/settings
+
+# Set horizontal zone (X axis)
+curl -X POST localhost:8081/api/settings/roi/33/66
+
+# Set vertical zone (Y axis) - crop timestamp/logo
+curl -X POST localhost:8081/api/settings/roi_y/10/90
+
+# Set threshold
+curl -X POST localhost:8081/api/settings/threshold/3000
+
+# Set all at once
+curl -X POST localhost:8081/api/settings \
+  -H "Content-Type: application/json" \
+  -d '{"roi_x_start":33, "roi_x_end":66, "roi_y_start":10, "roi_y_end":90}'
+```
 
 ## Debugging
 

@@ -10,6 +10,8 @@ import subprocess
 import time
 import threading
 import logging
+import json
+import os
 from dataclasses import dataclass
 from typing import Callable, Optional
 from enum import Enum
@@ -48,6 +50,11 @@ class MotionDetector:
         motion_threshold: int = 5000,
         min_duration: float = 3.0,
         check_interval: float = 1.0,
+        roi_x_start: int = 0,
+        roi_x_end: int = 100,
+        roi_y_start: int = 0,
+        roi_y_end: int = 100,
+        settings_file: Optional[str] = None,
         on_motion_start: Optional[Callable[[MotionEvent], None]] = None,
         on_motion_end: Optional[Callable[[MotionEvent], None]] = None,
         on_motion_frame: Optional[Callable[[MotionEvent], None]] = None,
@@ -60,6 +67,11 @@ class MotionDetector:
             motion_threshold: Minimum contour area to consider as motion
             min_duration: Seconds motion must persist before triggering
             check_interval: Seconds between frame checks
+            roi_x_start: Left boundary of detection zone (0-100 percentage)
+            roi_x_end: Right boundary of detection zone (0-100 percentage)
+            roi_y_start: Top boundary of detection zone (0-100 percentage)
+            roi_y_end: Bottom boundary of detection zone (0-100 percentage)
+            settings_file: Path to JSON settings file for live updates
             on_motion_start: Callback when motion confirmed
             on_motion_end: Callback when motion ends
             on_motion_frame: Callback for each frame with motion
@@ -68,6 +80,12 @@ class MotionDetector:
         self.motion_threshold = motion_threshold
         self.min_duration = min_duration
         self.check_interval = check_interval
+        self.roi_x_start = max(0, min(100, roi_x_start))
+        self.roi_x_end = max(0, min(100, roi_x_end))
+        self.roi_y_start = max(0, min(100, roi_y_start))
+        self.roi_y_end = max(0, min(100, roi_y_end))
+        self.settings_file = settings_file
+        self._settings_mtime = 0
 
         self.on_motion_start = on_motion_start
         self.on_motion_end = on_motion_end
@@ -165,13 +183,25 @@ class MotionDetector:
     def _detect_motion(self, frame: np.ndarray) -> int:
         """
         Detect motion in frame using background subtraction.
+        Only analyzes the middle third of the frame vertically to reduce
+        false positives from lighting changes on the sides.
 
         Returns:
             Total area of motion contours (0 if no motion)
         """
+        # Crop to region of interest (ROI) - configurable detection zone
+        height, width = frame.shape[:2]
+        left_bound = int(width * self.roi_x_start / 100)
+        right_bound = int(width * self.roi_x_end / 100)
+        top_bound = int(height * self.roi_y_start / 100)
+        bottom_bound = int(height * self.roi_y_end / 100)
+        roi_frame = frame[top_bound:bottom_bound, left_bound:right_bound]
+
+        logger.debug(f"ROI: x={left_bound}-{right_bound}, y={top_bound}-{bottom_bound}")
+
         # Resize for faster processing (optional, reduces CPU load)
         scale = 0.5
-        small_frame = cv2.resize(frame, None, fx=scale, fy=scale)
+        small_frame = cv2.resize(roi_frame, None, fx=scale, fy=scale)
 
         # Apply background subtraction
         fg_mask = self.bg_subtractor.apply(small_frame)
@@ -283,9 +313,14 @@ class MotionDetector:
         """Main detection loop."""
         logger.info(f"Starting motion detection on {self.stream_url}")
         logger.info(f"Threshold: {self.motion_threshold}, Min duration: {self.min_duration}s")
+        logger.info(f"ROI: {self.roi_x_start}% - {self.roi_x_end}%")
+        if self.settings_file:
+            logger.info(f"Settings file: {self.settings_file} (live reload enabled)")
 
         while self._running:
             try:
+                # Check for settings file changes
+                self._reload_settings_from_file()
                 self._process_frame()
             except Exception as e:
                 logger.error(f"Error processing frame: {e}")
@@ -317,13 +352,85 @@ class MotionDetector:
         with self._lock:
             return self.state == MotionState.ACTIVE
 
+    def set_roi(self, x_start: int, x_end: int, y_start: int = None, y_end: int = None):
+        """
+        Update the region of interest for motion detection.
+
+        Args:
+            x_start: Left boundary (0-100 percentage)
+            x_end: Right boundary (0-100 percentage)
+            y_start: Top boundary (0-100 percentage)
+            y_end: Bottom boundary (0-100 percentage)
+        """
+        with self._lock:
+            self.roi_x_start = max(0, min(100, x_start))
+            self.roi_x_end = max(0, min(100, x_end))
+            if y_start is not None:
+                self.roi_y_start = max(0, min(100, y_start))
+            if y_end is not None:
+                self.roi_y_end = max(0, min(100, y_end))
+            logger.info(f"ROI updated: x={self.roi_x_start}%-{self.roi_x_end}%, y={self.roi_y_start}%-{self.roi_y_end}%")
+
+    def set_threshold(self, threshold: int):
+        """Update motion threshold dynamically."""
+        with self._lock:
+            self.motion_threshold = max(0, threshold)
+            logger.info(f"Motion threshold updated: {self.motion_threshold}")
+
+    def _reload_settings_from_file(self):
+        """Check settings file for changes and reload if modified."""
+        if not self.settings_file:
+            return
+
+        try:
+            if not os.path.exists(self.settings_file):
+                return
+
+            mtime = os.path.getmtime(self.settings_file)
+            if mtime <= self._settings_mtime:
+                return  # File hasn't changed
+
+            with open(self.settings_file, 'r') as f:
+                settings = json.load(f)
+
+            self._settings_mtime = mtime
+
+            # Apply settings
+            changed = False
+            if 'roi_x_start' in settings and settings['roi_x_start'] != self.roi_x_start:
+                self.roi_x_start = max(0, min(100, int(settings['roi_x_start'])))
+                changed = True
+            if 'roi_x_end' in settings and settings['roi_x_end'] != self.roi_x_end:
+                self.roi_x_end = max(0, min(100, int(settings['roi_x_end'])))
+                changed = True
+            if 'roi_y_start' in settings and settings['roi_y_start'] != self.roi_y_start:
+                self.roi_y_start = max(0, min(100, int(settings['roi_y_start'])))
+                changed = True
+            if 'roi_y_end' in settings and settings['roi_y_end'] != self.roi_y_end:
+                self.roi_y_end = max(0, min(100, int(settings['roi_y_end'])))
+                changed = True
+            if 'motion_threshold' in settings and settings['motion_threshold'] != self.motion_threshold:
+                self.motion_threshold = max(0, int(settings['motion_threshold']))
+                changed = True
+
+            if changed:
+                logger.info(f"Settings reloaded: ROI x={self.roi_x_start}%-{self.roi_x_end}%, y={self.roi_y_start}%-{self.roi_y_end}%, threshold={self.motion_threshold}")
+
+        except Exception as e:
+            logger.warning(f"Error reloading settings: {e}")
+
     def get_stats(self) -> dict:
         """Get detection statistics."""
         return {
             "frames_processed": self.frames_processed,
             "motion_events": self.motion_events,
             "state": self.state.value,
-            "is_motion_active": self.is_motion_active
+            "is_motion_active": self.is_motion_active,
+            "roi_x_start": self.roi_x_start,
+            "roi_x_end": self.roi_x_end,
+            "roi_y_start": self.roi_y_start,
+            "roi_y_end": self.roi_y_end,
+            "motion_threshold": self.motion_threshold
         }
 
 
