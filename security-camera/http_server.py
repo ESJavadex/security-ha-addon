@@ -892,37 +892,62 @@ class SecurityHTTPHandler(SimpleHTTPRequestHandler):
                 self.send_error(404, f"Recording not found: {filename}")
                 return
 
+            deleted_files = []
+            recordings_dir = Path(self.recordings_path)
+
             # Delete video file
-            video_path = Path(self.recordings_path) / filename
+            video_path = recordings_dir / filename
             if video_path.exists():
                 video_path.unlink()
+                deleted_files.append(filename)
                 logger.info(f"Deleted video: {video_path}")
+            else:
+                logger.warning(f"Video file not found: {video_path}")
 
-            # Delete all screenshots
+            # Delete all screenshots from the array
             if recording_to_delete.get('screenshots'):
                 for screenshot in recording_to_delete['screenshots']:
-                    screenshot_path = Path(self.recordings_path) / screenshot
+                    # Handle both full path and just filename
+                    screenshot_name = Path(screenshot).name
+                    screenshot_path = recordings_dir / screenshot_name
                     if screenshot_path.exists():
                         screenshot_path.unlink()
+                        deleted_files.append(screenshot_name)
                         logger.info(f"Deleted screenshot: {screenshot_path}")
-            else:
-                # Fallback for old recordings with single thumbnail
-                thumb_path = video_path.with_suffix('.jpg')
+
+            # Also delete thumbnail if it's different from screenshots
+            if recording_to_delete.get('thumbnail'):
+                thumb_name = Path(recording_to_delete['thumbnail']).name
+                thumb_path = recordings_dir / thumb_name
                 if thumb_path.exists():
                     thumb_path.unlink()
+                    if thumb_name not in deleted_files:
+                        deleted_files.append(thumb_name)
                     logger.info(f"Deleted thumbnail: {thumb_path}")
 
-            # Update metadata
+            # Clean up any orphan files with the same base name (e.g., motion_20241127_143022_*.jpg)
+            base_name = video_path.stem  # e.g., "motion_20241127_143022"
+            for orphan_file in recordings_dir.glob(f"{base_name}*.jpg"):
+                if orphan_file.name not in deleted_files:
+                    orphan_file.unlink()
+                    deleted_files.append(orphan_file.name)
+                    logger.info(f"Deleted orphan file: {orphan_file}")
+
+            # Update metadata - remove from list
             recordings.remove(recording_to_delete)
             with open(metadata_file, 'w') as f:
                 json.dump(recordings, f, indent=2)
 
-            logger.info(f"Recording deleted: {filename}")
+            logger.info(f"Recording deleted: {filename}, total files removed: {len(deleted_files)}")
 
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
             self.end_headers()
-            self.wfile.write(json.dumps({"status": "ok", "deleted": filename}).encode())
+            self.wfile.write(json.dumps({
+                "status": "ok",
+                "deleted": filename,
+                "files_removed": len(deleted_files)
+            }).encode())
 
         except Exception as e:
             logger.error(f"Error deleting recording: {e}")
