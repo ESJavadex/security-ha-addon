@@ -7,6 +7,7 @@ RUN apk add --no-cache \
     py3-pip \
     ffmpeg \
     dos2unix \
+    jq \
     # OpenCV dependencies
     py3-numpy \
     opencv \

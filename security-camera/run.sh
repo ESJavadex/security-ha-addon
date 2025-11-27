@@ -8,29 +8,30 @@ set -e
 echo "[INFO] Starting Security Camera Motion Detection Add-on..."
 echo "[INFO] Checking environment..."
 
-# Read configuration from Home Assistant
-if command -v bashio &> /dev/null && bashio::supervisor.ping 2>/dev/null; then
-    echo "[INFO] Running as Home Assistant add-on"
-    echo "[INFO] Reading configuration from Supervisor API..."
+# Read configuration - try /data/options.json first (HA standard), then env vars
+CONFIG_FILE="/data/options.json"
 
-    # Debug: show raw config
-    echo "[DEBUG] Raw addon config:"
-    bashio::addon.config || echo "[DEBUG] Could not read raw config"
+echo "[DEBUG] Checking for config file: ${CONFIG_FILE}"
+if [ -f "$CONFIG_FILE" ]; then
+    echo "[INFO] Found config file, reading options..."
+    echo "[DEBUG] Config file contents:"
+    cat "$CONFIG_FILE"
+    echo ""
 
-    STREAM_URL=$(bashio::config 'stream_url') || STREAM_URL=""
+    # Read config using jq (more reliable than bashio)
+    STREAM_URL=$(jq -r '.stream_url // empty' "$CONFIG_FILE")
+    MOTION_THRESHOLD=$(jq -r '.motion_threshold // empty' "$CONFIG_FILE")
+    MOTION_MIN_DURATION=$(jq -r '.motion_min_duration // empty' "$CONFIG_FILE")
+    RECORDING_PRE_ROLL=$(jq -r '.recording_pre_roll // empty' "$CONFIG_FILE")
+    RECORDING_POST_ROLL=$(jq -r '.recording_post_roll // empty' "$CONFIG_FILE")
+    RECORDINGS_PATH=$(jq -r '.recordings_path // empty' "$CONFIG_FILE")
+    MAX_RECORDINGS=$(jq -r '.max_recordings // empty' "$CONFIG_FILE")
+    LOG_LEVEL=$(jq -r '.log_level // empty' "$CONFIG_FILE")
+
     echo "[DEBUG] stream_url = '${STREAM_URL}'"
-
-    MOTION_THRESHOLD=$(bashio::config 'motion_threshold') || MOTION_THRESHOLD=""
-    MOTION_MIN_DURATION=$(bashio::config 'motion_min_duration') || MOTION_MIN_DURATION=""
-    RECORDING_PRE_ROLL=$(bashio::config 'recording_pre_roll') || RECORDING_PRE_ROLL=""
-    RECORDING_POST_ROLL=$(bashio::config 'recording_post_roll') || RECORDING_POST_ROLL=""
-    RECORDINGS_PATH=$(bashio::config 'recordings_path') || RECORDINGS_PATH=""
-    MAX_RECORDINGS=$(bashio::config 'max_recordings') || MAX_RECORDINGS=""
-    LOG_LEVEL=$(bashio::config 'log_level') || LOG_LEVEL=""
-
     echo "[INFO] Config read complete"
 else
-    echo "[INFO] Running in local/standalone mode"
+    echo "[INFO] No config file found, using environment variables"
 fi
 
 # Apply defaults for any missing values
