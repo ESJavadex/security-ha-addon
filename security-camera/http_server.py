@@ -13,6 +13,404 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# Embedded HTML for the recordings viewer UI
+INDEX_HTML = '''<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Security Camera Recordings</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            min-height: 100vh;
+        }
+        .header {
+            background: #16213e;
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 1rem;
+            border-bottom: 1px solid #0f3460;
+        }
+        .header h1 {
+            font-size: 1.5rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .status {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.9rem;
+        }
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #4ade80;
+        }
+        .status-dot.recording { background: #ef4444; animation: pulse 1s infinite; }
+        .status-dot.motion { background: #f59e0b; animation: pulse 0.5s infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        .filters {
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .filters label { font-size: 0.9rem; color: #aaa; }
+        .filters input, .filters select {
+            background: #0f3460;
+            border: 1px solid #1a4a7a;
+            color: #eee;
+            padding: 0.5rem;
+            border-radius: 4px;
+        }
+        .container { padding: 1.5rem; }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 1.5rem;
+        }
+        .card {
+            background: #16213e;
+            border-radius: 8px;
+            overflow: hidden;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            border: 1px solid #0f3460;
+        }
+        .card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 8px 25px rgba(0,0,0,0.3);
+        }
+        .card-thumb {
+            position: relative;
+            aspect-ratio: 16/9;
+            background: #0a0a1a;
+        }
+        .card-thumb img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        .card-thumb .play-icon {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 60px;
+            height: 60px;
+            background: rgba(0,0,0,0.7);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            transition: opacity 0.2s;
+        }
+        .card:hover .play-icon { opacity: 1; }
+        .play-icon::after {
+            content: '';
+            border-style: solid;
+            border-width: 12px 0 12px 20px;
+            border-color: transparent transparent transparent #fff;
+            margin-left: 4px;
+        }
+        .card-thumb .duration {
+            position: absolute;
+            bottom: 8px;
+            right: 8px;
+            background: rgba(0,0,0,0.8);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.8rem;
+        }
+        .card-info { padding: 1rem; }
+        .card-date { font-size: 1rem; font-weight: 500; }
+        .card-time { font-size: 0.85rem; color: #aaa; margin-top: 0.25rem; }
+        .card-size { font-size: 0.8rem; color: #666; margin-top: 0.5rem; }
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.9);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+        .modal.active { display: flex; }
+        .modal-content {
+            max-width: 90vw;
+            max-height: 90vh;
+            position: relative;
+        }
+        .modal video {
+            max-width: 90vw;
+            max-height: 80vh;
+            border-radius: 8px;
+        }
+        .modal-close {
+            position: absolute;
+            top: -40px;
+            right: 0;
+            background: none;
+            border: none;
+            color: #fff;
+            font-size: 2rem;
+            cursor: pointer;
+            padding: 0.5rem;
+        }
+        .modal-info {
+            color: #aaa;
+            text-align: center;
+            margin-top: 1rem;
+        }
+        .modal-nav {
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            background: rgba(255,255,255,0.1);
+            border: none;
+            color: #fff;
+            font-size: 2rem;
+            padding: 1rem;
+            cursor: pointer;
+            border-radius: 4px;
+        }
+        .modal-nav:hover { background: rgba(255,255,255,0.2); }
+        .modal-nav.prev { left: -60px; }
+        .modal-nav.next { right: -60px; }
+        .empty {
+            text-align: center;
+            padding: 4rem;
+            color: #666;
+        }
+        .empty-icon { font-size: 4rem; margin-bottom: 1rem; }
+        .stats {
+            display: flex;
+            gap: 2rem;
+            margin-bottom: 1.5rem;
+            flex-wrap: wrap;
+        }
+        .stat {
+            background: #16213e;
+            padding: 1rem 1.5rem;
+            border-radius: 8px;
+            border: 1px solid #0f3460;
+        }
+        .stat-value { font-size: 1.5rem; font-weight: bold; }
+        .stat-label { font-size: 0.8rem; color: #aaa; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+            </svg>
+            Security Recordings
+        </h1>
+        <div class="status">
+            <span class="status-dot" id="statusDot"></span>
+            <span id="statusText">Connecting...</span>
+        </div>
+        <div class="filters">
+            <label>Filter by date:</label>
+            <input type="date" id="filterDate">
+            <select id="filterSort">
+                <option value="newest">Newest first</option>
+                <option value="oldest">Oldest first</option>
+            </select>
+        </div>
+    </div>
+    <div class="container">
+        <div class="stats" id="stats"></div>
+        <div class="grid" id="grid"></div>
+        <div class="empty" id="empty" style="display:none;">
+            <div class="empty-icon">📹</div>
+            <p>No recordings found</p>
+        </div>
+    </div>
+    <div class="modal" id="modal">
+        <div class="modal-content">
+            <button class="modal-close" onclick="closeModal()">&times;</button>
+            <button class="modal-nav prev" onclick="navVideo(-1)">&#8249;</button>
+            <video id="player" controls></video>
+            <button class="modal-nav next" onclick="navVideo(1)">&#8250;</button>
+            <div class="modal-info" id="modalInfo"></div>
+        </div>
+    </div>
+    <script>
+        let recordings = [];
+        let filteredRecordings = [];
+        let currentIndex = 0;
+
+        function formatDate(ts) {
+            const d = new Date(ts * 1000);
+            return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+        }
+        function formatTime(ts) {
+            const d = new Date(ts * 1000);
+            return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        }
+        function formatDuration(secs) {
+            if (!secs) return '--:--';
+            const m = Math.floor(secs / 60);
+            const s = Math.floor(secs % 60);
+            return `${m}:${s.toString().padStart(2, '0')}`;
+        }
+        function formatSize(bytes) {
+            if (!bytes) return '';
+            const mb = bytes / 1024 / 1024;
+            return `${mb.toFixed(1)} MB`;
+        }
+        function getDateString(ts) {
+            const d = new Date(ts * 1000);
+            return d.toISOString().split('T')[0];
+        }
+
+        async function loadRecordings() {
+            try {
+                const res = await fetch('/api/recordings');
+                recordings = await res.json();
+                applyFilters();
+            } catch (e) {
+                console.error('Failed to load recordings:', e);
+            }
+        }
+
+        async function loadState() {
+            try {
+                const res = await fetch('/api/state');
+                const state = await res.json();
+                const dot = document.getElementById('statusDot');
+                const text = document.getElementById('statusText');
+                dot.className = 'status-dot';
+                if (state.recording?.is_recording) {
+                    dot.classList.add('recording');
+                    text.textContent = 'Recording...';
+                } else if (state.motion?.detected) {
+                    dot.classList.add('motion');
+                    text.textContent = 'Motion detected';
+                } else {
+                    text.textContent = 'Monitoring';
+                }
+            } catch (e) {
+                document.getElementById('statusText').textContent = 'Offline';
+            }
+        }
+
+        function applyFilters() {
+            const dateFilter = document.getElementById('filterDate').value;
+            const sort = document.getElementById('filterSort').value;
+
+            filteredRecordings = [...recordings];
+
+            if (dateFilter) {
+                filteredRecordings = filteredRecordings.filter(r => getDateString(r.start_time) === dateFilter);
+            }
+
+            filteredRecordings.sort((a, b) => sort === 'newest' ? b.start_time - a.start_time : a.start_time - b.start_time);
+
+            renderGrid();
+            renderStats();
+        }
+
+        function renderStats() {
+            const totalSize = recordings.reduce((sum, r) => sum + (r.filesize || 0), 0);
+            const totalDuration = recordings.reduce((sum, r) => sum + (r.duration || 0), 0);
+            document.getElementById('stats').innerHTML = `
+                <div class="stat"><div class="stat-value">${recordings.length}</div><div class="stat-label">Total Recordings</div></div>
+                <div class="stat"><div class="stat-value">${formatSize(totalSize)}</div><div class="stat-label">Total Size</div></div>
+                <div class="stat"><div class="stat-value">${Math.floor(totalDuration / 60)}m</div><div class="stat-label">Total Duration</div></div>
+                <div class="stat"><div class="stat-value">${filteredRecordings.length}</div><div class="stat-label">Showing</div></div>
+            `;
+        }
+
+        function renderGrid() {
+            const grid = document.getElementById('grid');
+            const empty = document.getElementById('empty');
+
+            if (filteredRecordings.length === 0) {
+                grid.innerHTML = '';
+                empty.style.display = 'block';
+                return;
+            }
+            empty.style.display = 'none';
+
+            grid.innerHTML = filteredRecordings.map((r, i) => {
+                const thumbName = r.thumbnail ? r.thumbnail.split('/').pop() : r.filename.replace('.mp4', '.jpg');
+                return `
+                    <div class="card" onclick="openModal(${i})">
+                        <div class="card-thumb">
+                            <img src="/${thumbName}" alt="Thumbnail" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 320 180%22><rect fill=%22%23333%22 width=%22320%22 height=%22180%22/><text x=%22160%22 y=%2290%22 fill=%22%23666%22 text-anchor=%22middle%22>No preview</text></svg>'">
+                            <div class="play-icon"></div>
+                            <div class="duration">${formatDuration(r.duration)}</div>
+                        </div>
+                        <div class="card-info">
+                            <div class="card-date">${formatDate(r.start_time)}</div>
+                            <div class="card-time">${formatTime(r.start_time)}</div>
+                            <div class="card-size">${formatSize(r.filesize)}</div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function openModal(index) {
+            currentIndex = index;
+            const r = filteredRecordings[index];
+            const player = document.getElementById('player');
+            player.src = '/' + r.filename;
+            document.getElementById('modalInfo').textContent = `${formatDate(r.start_time)} at ${formatTime(r.start_time)} - ${formatDuration(r.duration)}`;
+            document.getElementById('modal').classList.add('active');
+            player.play();
+        }
+
+        function closeModal() {
+            document.getElementById('modal').classList.remove('active');
+            document.getElementById('player').pause();
+        }
+
+        function navVideo(dir) {
+            currentIndex = (currentIndex + dir + filteredRecordings.length) % filteredRecordings.length;
+            openModal(currentIndex);
+        }
+
+        document.addEventListener('keydown', (e) => {
+            if (!document.getElementById('modal').classList.contains('active')) return;
+            if (e.key === 'Escape') closeModal();
+            if (e.key === 'ArrowLeft') navVideo(-1);
+            if (e.key === 'ArrowRight') navVideo(1);
+        });
+
+        document.getElementById('modal').addEventListener('click', (e) => {
+            if (e.target.id === 'modal') closeModal();
+        });
+
+        document.getElementById('filterDate').addEventListener('change', applyFilters);
+        document.getElementById('filterSort').addEventListener('change', applyFilters);
+
+        loadRecordings();
+        loadState();
+        setInterval(loadState, 5000);
+        setInterval(loadRecordings, 30000);
+    </script>
+</body>
+</html>
+'''
+
 
 class SecurityHTTPHandler(SimpleHTTPRequestHandler):
     """HTTP handler with CORS and API endpoints."""
@@ -52,8 +450,11 @@ class SecurityHTTPHandler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         """Handle GET requests."""
+        # Serve index page at root
+        if self.path == '/' or self.path == '/index.html':
+            self.handle_index()
         # API endpoints
-        if self.path == '/api/state':
+        elif self.path == '/api/state':
             self.handle_api_state()
         elif self.path == '/api/recordings':
             self.handle_api_recordings()
@@ -66,6 +467,13 @@ class SecurityHTTPHandler(SimpleHTTPRequestHandler):
         else:
             # Serve static files (recordings, thumbnails)
             super().do_GET()
+
+    def handle_index(self):
+        """Serve the recordings viewer UI."""
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/html; charset=utf-8')
+        self.end_headers()
+        self.wfile.write(INDEX_HTML.encode('utf-8'))
 
     def do_POST(self):
         """Handle POST requests."""

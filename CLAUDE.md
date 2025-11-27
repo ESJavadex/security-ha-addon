@@ -93,8 +93,22 @@ The ROI (Region of Interest) defines where motion is detected. Recordings are al
 
 **Default:** Middle third horizontally (33-66%), full height minus edges (5-95%)
 
+## Web UI
+
+Access the recordings viewer at `http://<host>:8081/`
+
+Features:
+- **Grid view** of all recordings with thumbnails
+- **Video player** - click any recording to play inline
+- **Date filter** - filter recordings by specific date
+- **Sort order** - newest or oldest first
+- **Live status** - shows current motion/recording state
+- **Stats** - total recordings, size, and duration
+- **Keyboard navigation** - arrow keys to navigate, Escape to close
+
 ## API Endpoints
 
+- `GET /` - Web UI for viewing recordings
 - `GET /api/health` - Health check
 - `GET /api/state` - Motion/recording state JSON
 - `GET /api/recordings` - List recordings
