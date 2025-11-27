@@ -194,6 +194,43 @@ INDEX_HTML = '''<!DOCTYPE html>
         .btn-cancel:hover { background: #4b5563; }
         .btn-confirm-delete { background: #dc2626; color: #fff; }
         .btn-confirm-delete:hover { background: #b91c1c; }
+        .btn-favorite {
+            background: transparent;
+            border: none;
+            font-size: 1.2rem;
+            cursor: pointer;
+            padding: 0.3rem;
+            opacity: 0.5;
+            transition: all 0.2s;
+        }
+        .btn-favorite:hover { opacity: 1; transform: scale(1.2); }
+        .btn-favorite.active { opacity: 1; }
+        .card-actions {
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
+        }
+        .favorite-badge {
+            position: absolute;
+            top: 8px;
+            left: 8px;
+            font-size: 1.2rem;
+            text-shadow: 0 1px 3px rgba(0,0,0,0.8);
+        }
+        .modal-favorite {
+            background: transparent;
+            border: 2px solid #f59e0b;
+            color: #f59e0b;
+            padding: 0.5rem 1rem;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .modal-favorite:hover { background: rgba(245, 158, 11, 0.1); }
+        .modal-favorite.active { background: #f59e0b; color: #000; }
         .modal {
             display: none;
             position: fixed;
@@ -299,7 +336,11 @@ INDEX_HTML = '''<!DOCTYPE html>
             <span id="statusText">Connecting...</span>
         </div>
         <div class="filters">
-            <label>Filter by date:</label>
+            <label>Filter:</label>
+            <select id="filterFavorites">
+                <option value="all">All recordings</option>
+                <option value="favorites">Favorites only</option>
+            </select>
             <input type="date" id="filterDate">
             <select id="filterSort">
                 <option value="newest">Newest first</option>
@@ -323,6 +364,9 @@ INDEX_HTML = '''<!DOCTYPE html>
             <button class="modal-nav next" onclick="navVideo(1)">&#8250;</button>
             <div class="modal-info" id="modalInfo"></div>
             <div class="modal-actions">
+                <button class="modal-favorite" id="modalFavorite" onclick="toggleFavoriteCurrent()">
+                    <span id="modalFavIcon">☆</span> <span id="modalFavText">Add to Favorites</span>
+                </button>
                 <button class="modal-delete" onclick="confirmDeleteCurrent()">Delete Recording</button>
             </div>
         </div>
@@ -400,8 +444,13 @@ INDEX_HTML = '''<!DOCTYPE html>
         function applyFilters() {
             const dateFilter = document.getElementById('filterDate').value;
             const sort = document.getElementById('filterSort').value;
+            const favFilter = document.getElementById('filterFavorites').value;
 
             filteredRecordings = [...recordings];
+
+            if (favFilter === 'favorites') {
+                filteredRecordings = filteredRecordings.filter(r => r.favorite);
+            }
 
             if (dateFilter) {
                 filteredRecordings = filteredRecordings.filter(r => getDateString(r.start_time) === dateFilter);
@@ -416,10 +465,11 @@ INDEX_HTML = '''<!DOCTYPE html>
         function renderStats() {
             const totalSize = recordings.reduce((sum, r) => sum + (r.filesize || 0), 0);
             const totalDuration = recordings.reduce((sum, r) => sum + (r.duration || 0), 0);
+            const totalFavorites = recordings.filter(r => r.favorite).length;
             document.getElementById('stats').innerHTML = `
                 <div class="stat"><div class="stat-value">${recordings.length}</div><div class="stat-label">Total Recordings</div></div>
+                <div class="stat"><div class="stat-value">${totalFavorites} ★</div><div class="stat-label">Favorites</div></div>
                 <div class="stat"><div class="stat-value">${formatSize(totalSize)}</div><div class="stat-label">Total Size</div></div>
-                <div class="stat"><div class="stat-value">${Math.floor(totalDuration / 60)}m</div><div class="stat-label">Total Duration</div></div>
                 <div class="stat"><div class="stat-value">${filteredRecordings.length}</div><div class="stat-label">Showing</div></div>
             `;
         }
@@ -437,10 +487,12 @@ INDEX_HTML = '''<!DOCTYPE html>
 
             grid.innerHTML = filteredRecordings.map((r, i) => {
                 const thumbName = r.thumbnail ? r.thumbnail.split('/').pop() : r.filename.replace('.mp4', '.jpg');
+                const isFav = r.favorite || false;
                 return `
                     <div class="card">
                         <div class="card-thumb" onclick="openModal(${i})">
                             <img src="/${thumbName}" alt="Thumbnail" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 320 180%22><rect fill=%22%23333%22 width=%22320%22 height=%22180%22/><text x=%22160%22 y=%2290%22 fill=%22%23666%22 text-anchor=%22middle%22>No preview</text></svg>'">
+                            ${isFav ? '<div class="favorite-badge">★</div>' : ''}
                             <div class="play-icon"></div>
                             <div class="duration">${formatDuration(r.duration)}</div>
                         </div>
@@ -450,7 +502,10 @@ INDEX_HTML = '''<!DOCTYPE html>
                                 <div class="card-time">${formatTime(r.start_time)}</div>
                                 <div class="card-size">${formatSize(r.filesize)}</div>
                             </div>
-                            <button class="btn-delete" onclick="confirmDelete('${r.filename}', event)">Delete</button>
+                            <div class="card-actions">
+                                <button class="btn-favorite ${isFav ? 'active' : ''}" onclick="toggleFavorite('${r.filename}', event)" title="${isFav ? 'Remove from favorites' : 'Add to favorites'}">${isFav ? '★' : '☆'}</button>
+                                <button class="btn-delete" onclick="confirmDelete('${r.filename}', event)">Delete</button>
+                            </div>
                         </div>
                     </div>
                 `;
@@ -463,8 +518,24 @@ INDEX_HTML = '''<!DOCTYPE html>
             const player = document.getElementById('player');
             player.src = '/' + r.filename;
             document.getElementById('modalInfo').textContent = `${formatDate(r.start_time)} at ${formatTime(r.start_time)} - ${formatDuration(r.duration)}`;
+            updateModalFavorite(r.favorite);
             document.getElementById('modal').classList.add('active');
             player.play();
+        }
+
+        function updateModalFavorite(isFav) {
+            const btn = document.getElementById('modalFavorite');
+            const icon = document.getElementById('modalFavIcon');
+            const text = document.getElementById('modalFavText');
+            if (isFav) {
+                btn.classList.add('active');
+                icon.textContent = '★';
+                text.textContent = 'Favorited';
+            } else {
+                btn.classList.remove('active');
+                icon.textContent = '☆';
+                text.textContent = 'Add to Favorites';
+            }
         }
 
         function closeModal() {
@@ -490,6 +561,32 @@ INDEX_HTML = '''<!DOCTYPE html>
 
         document.getElementById('filterDate').addEventListener('change', applyFilters);
         document.getElementById('filterSort').addEventListener('change', applyFilters);
+        document.getElementById('filterFavorites').addEventListener('change', applyFilters);
+
+        async function toggleFavorite(filename, event) {
+            if (event) event.stopPropagation();
+            try {
+                const res = await fetch(`/api/recordings/${filename}/favorite`, { method: 'POST' });
+                if (res.ok) {
+                    const data = await res.json();
+                    // Update local data
+                    const rec = recordings.find(r => r.filename === filename);
+                    if (rec) rec.favorite = data.favorite;
+                    applyFilters();
+                }
+            } catch (e) {
+                console.error('Failed to toggle favorite:', e);
+            }
+        }
+
+        async function toggleFavoriteCurrent() {
+            const r = filteredRecordings[currentIndex];
+            if (!r) return;
+            await toggleFavorite(r.filename);
+            // Update modal UI
+            const rec = recordings.find(x => x.filename === r.filename);
+            if (rec) updateModalFavorite(rec.favorite);
+        }
 
         let deleteFilename = null;
 
@@ -563,7 +660,7 @@ class SecurityHTTPHandler(SimpleHTTPRequestHandler):
     def send_cors_headers(self):
         """Add CORS headers for cross-origin requests."""
         self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS')
+        self.send_header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
         self.send_header('Access-Control-Allow-Headers', 'Content-Type')
         self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
 
@@ -606,6 +703,8 @@ class SecurityHTTPHandler(SimpleHTTPRequestHandler):
             self.handle_api_set_settings()
         elif self.path.startswith('/api/settings/'):
             self.handle_api_quick_settings()
+        elif self.path.endswith('/favorite'):
+            self.handle_api_toggle_favorite()
         else:
             self.send_error(404, "API endpoint not found")
 
@@ -716,6 +815,62 @@ class SecurityHTTPHandler(SimpleHTTPRequestHandler):
 
         except Exception as e:
             logger.error(f"Error deleting recording: {e}")
+            self.send_error(500, str(e))
+
+    def handle_api_toggle_favorite(self):
+        """Toggle favorite status: POST /api/recordings/{filename}/favorite"""
+        try:
+            # Extract filename from path: /api/recordings/{filename}/favorite
+            parts = self.path.split('/')
+            if len(parts) < 5:
+                self.send_error(400, "Filename required")
+                return
+
+            filename = parts[3]
+            if not filename.endswith('.mp4'):
+                self.send_error(400, "Invalid filename")
+                return
+
+            # Load metadata
+            metadata_file = Path(self.recordings_path) / "recordings.json"
+            if not metadata_file.exists():
+                self.send_error(404, "No recordings found")
+                return
+
+            with open(metadata_file, 'r') as f:
+                recordings = json.load(f)
+
+            # Find and toggle favorite
+            recording = None
+            for r in recordings:
+                if r.get('filename') == filename:
+                    recording = r
+                    break
+
+            if not recording:
+                self.send_error(404, f"Recording not found: {filename}")
+                return
+
+            # Toggle favorite status
+            recording['favorite'] = not recording.get('favorite', False)
+
+            # Save metadata
+            with open(metadata_file, 'w') as f:
+                json.dump(recordings, f, indent=2)
+
+            logger.info(f"Recording {filename} favorite: {recording['favorite']}")
+
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                "status": "ok",
+                "filename": filename,
+                "favorite": recording['favorite']
+            }).encode())
+
+        except Exception as e:
+            logger.error(f"Error toggling favorite: {e}")
             self.send_error(500, str(e))
 
     def handle_api_health(self):
