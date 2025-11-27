@@ -1,0 +1,33 @@
+# Environment files
+.env
+*.env.local
+
+# Local test artifacts
+local-test/recordings/
+local-test/state/
+local-test/*.py
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test recordings (keep in .gitignore but not in local-test)
+*.mp4
+*.ts
+*.jpg
+!security-camera/*.jpg

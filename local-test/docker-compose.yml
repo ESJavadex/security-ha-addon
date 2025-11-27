@@ -1,0 +1,23 @@
+services:
+  security-camera:
+    build:
+      context: .
+      dockerfile: Dockerfile.local
+    container_name: security-camera-test
+    environment:
+      - STREAM_URL=${STREAM_URL:-http://host.docker.internal:8080/stream.m3u8}
+      - MOTION_THRESHOLD=${MOTION_THRESHOLD:-5000}
+      - MOTION_MIN_DURATION=${MOTION_MIN_DURATION:-3}
+      - RECORDING_PRE_ROLL=${RECORDING_PRE_ROLL:-6}
+      - RECORDING_POST_ROLL=${RECORDING_POST_ROLL:-5}
+      - RECORDINGS_PATH=/share/security_recordings
+      - MAX_RECORDINGS=${MAX_RECORDINGS:-50}
+      - LOG_LEVEL=${LOG_LEVEL:-debug}
+    ports:
+      - "8081:8081"
+    volumes:
+      - ./recordings:/share/security_recordings
+      - ./state:/share
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
