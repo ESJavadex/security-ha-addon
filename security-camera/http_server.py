@@ -25,6 +25,14 @@ class SecurityHTTPHandler(SimpleHTTPRequestHandler):
         # Set directory to recordings path
         super().__init__(*args, directory=self.recordings_path, **kwargs)
 
+    def handle(self):
+        """Handle request with graceful connection error handling."""
+        try:
+            super().handle()
+        except (ConnectionResetError, BrokenPipeError) as e:
+            # Client disconnected mid-transfer - expected behavior, don't spam logs
+            logger.debug(f"Client disconnected: {e}")
+
     def log_message(self, format, *args):
         """Log to stderr for Home Assistant."""
         logger.info("%s - %s", self.address_string(), format % args)
