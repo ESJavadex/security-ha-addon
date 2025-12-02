@@ -20,7 +20,7 @@ INDEX_HTML_TEMPLATE = '''<!DOCTYPE html>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Security Camera Recordings</title>
-    <script>window.BASE_PATH = "{base_path}";</script>
+    <script>window.BASE_PATH = "%%BASE_PATH%%";</script>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
@@ -1059,7 +1059,7 @@ class SecurityHTTPHandler(SimpleHTTPRequestHandler):
         ingress_path = self.headers.get('X-Ingress-Path', '')
 
         # Inject the base path into the HTML template
-        html = INDEX_HTML_TEMPLATE.format(base_path=ingress_path)
+        html = INDEX_HTML_TEMPLATE.replace('%%BASE_PATH%%', ingress_path)
 
         self.send_response(200)
         self.send_header('Content-Type', 'text/html; charset=utf-8')
