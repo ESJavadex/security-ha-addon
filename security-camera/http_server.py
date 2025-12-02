@@ -964,12 +964,17 @@ INDEX_HTML_TEMPLATE = '''<!DOCTYPE html>
         async function executeBulkDelete() {
             if (bulkDeleteFiles.length === 0) return;
 
+            const payload = { filenames: bulkDeleteFiles };
+            console.log('Bulk delete payload:', payload);
+            console.log('Bulk delete URL:', basePath + '/api/recordings/bulk-delete');
+
             try {
                 const res = await fetch(basePath + '/api/recordings/bulk-delete', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ filenames: bulkDeleteFiles })
+                    body: JSON.stringify(payload)
                 });
+                console.log('Bulk delete response status:', res.status);
 
                 if (res.ok) {
                     const result = await res.json();
@@ -1068,13 +1073,17 @@ class SecurityHTTPHandler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         """Handle POST requests."""
-        if self.path == '/api/settings':
+        # Parse path to handle query strings properly
+        parsed_path = urlparse(self.path).path
+        logger.debug(f"POST request path: {self.path} -> parsed: {parsed_path}")
+
+        if parsed_path == '/api/settings':
             self.handle_api_set_settings()
-        elif self.path.startswith('/api/settings/'):
+        elif parsed_path.startswith('/api/settings/'):
             self.handle_api_quick_settings()
-        elif self.path == '/api/recordings/bulk-delete':
+        elif parsed_path == '/api/recordings/bulk-delete':
             self.handle_api_bulk_delete()
-        elif self.path.endswith('/favorite'):
+        elif parsed_path.endswith('/favorite'):
             self.handle_api_toggle_favorite()
         else:
             self.send_error(404, "API endpoint not found")
@@ -1225,8 +1234,25 @@ class SecurityHTTPHandler(SimpleHTTPRequestHandler):
         """Bulk delete recordings: POST /api/recordings/bulk-delete with JSON body {"filenames": [...]}"""
         try:
             content_length = int(self.headers.get('Content-Length', 0))
+            logger.debug(f"Bulk delete - Content-Length: {content_length}")
+
+            if content_length == 0:
+                self.send_error(400, "Request body is empty")
+                return
+
             body = self.rfile.read(content_length).decode('utf-8')
-            data = json.loads(body)
+            logger.debug(f"Bulk delete - Body: {body[:200] if body else 'EMPTY'}")
+
+            if not body.strip():
+                self.send_error(400, "Request body is empty")
+                return
+
+            try:
+                data = json.loads(body)
+            except json.JSONDecodeError as e:
+                logger.error(f"JSON parse error: {e}, body: {body[:100]}")
+                self.send_error(400, f"Invalid JSON: {e}")
+                return
 
             filenames = data.get('filenames', [])
             if not filenames:
