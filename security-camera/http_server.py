@@ -368,6 +368,98 @@ INDEX_HTML = '''<!DOCTYPE html>
         }
         .stat-value { font-size: 1.5rem; font-weight: bold; }
         .stat-label { font-size: 0.8rem; color: #aaa; }
+        /* Selection mode styles */
+        .selection-bar {
+            display: none;
+            background: #0f3460;
+            padding: 0.75rem 1.5rem;
+            align-items: center;
+            gap: 1rem;
+            flex-wrap: wrap;
+            border-bottom: 1px solid #1a4a7a;
+        }
+        .selection-bar.active { display: flex; }
+        .selection-bar .selection-info {
+            font-size: 0.9rem;
+            color: #aaa;
+        }
+        .selection-bar .selection-count {
+            color: #4ade80;
+            font-weight: bold;
+        }
+        .selection-controls {
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+        }
+        .btn-selection {
+            background: #1a4a7a;
+            border: 1px solid #2563eb;
+            color: #eee;
+            padding: 0.4rem 0.8rem;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.85rem;
+            transition: all 0.2s;
+        }
+        .btn-selection:hover { background: #2563eb; }
+        .btn-selection.danger {
+            border-color: #dc2626;
+            color: #ef4444;
+        }
+        .btn-selection.danger:hover {
+            background: #dc2626;
+            color: #fff;
+        }
+        .btn-toggle-select {
+            background: transparent;
+            border: 1px solid #4ade80;
+            color: #4ade80;
+            padding: 0.4rem 0.8rem;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.85rem;
+            transition: all 0.2s;
+        }
+        .btn-toggle-select:hover { background: rgba(74, 222, 128, 0.1); }
+        .btn-toggle-select.active {
+            background: #4ade80;
+            color: #000;
+        }
+        .card.selectable .card-thumb::before {
+            content: '';
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            width: 24px;
+            height: 24px;
+            border: 2px solid rgba(255,255,255,0.7);
+            border-radius: 4px;
+            background: rgba(0,0,0,0.5);
+            z-index: 10;
+            transition: all 0.2s;
+        }
+        .card.selectable.selected .card-thumb::before {
+            background: #4ade80;
+            border-color: #4ade80;
+        }
+        .card.selectable.selected .card-thumb::after {
+            content: '✓';
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #000;
+            font-weight: bold;
+            font-size: 14px;
+            z-index: 11;
+        }
+        .card.selectable { cursor: pointer; }
+        .card.selectable .card-info { pointer-events: none; }
     </style>
 </head>
 <body>
@@ -393,6 +485,18 @@ INDEX_HTML = '''<!DOCTYPE html>
                 <option value="newest">Newest first</option>
                 <option value="oldest">Oldest first</option>
             </select>
+            <button class="btn-toggle-select" id="btnToggleSelect" onclick="toggleSelectionMode()">Select</button>
+        </div>
+    </div>
+    <div class="selection-bar" id="selectionBar">
+        <span class="selection-info">
+            <span class="selection-count" id="selectionCount">0</span> selected
+        </span>
+        <div class="selection-controls">
+            <button class="btn-selection" onclick="selectAll()">Select All</button>
+            <button class="btn-selection" onclick="selectAllExceptFavorites()">All Except Favorites</button>
+            <button class="btn-selection" onclick="deselectAll()">Deselect All</button>
+            <button class="btn-selection danger" id="btnDeleteSelected" onclick="confirmDeleteSelected()" disabled>Delete Selected</button>
         </div>
     </div>
     <div class="container">
@@ -432,6 +536,8 @@ INDEX_HTML = '''<!DOCTYPE html>
         let recordings = [];
         let filteredRecordings = [];
         let currentIndex = 0;
+        let selectionMode = false;
+        let selectedFiles = new Set();
 
         function formatDate(ts) {
             const d = new Date(ts * 1000);
@@ -536,6 +642,7 @@ INDEX_HTML = '''<!DOCTYPE html>
                 const thumbName = r.thumbnail ? r.thumbnail.split('/').pop() : r.filename.replace('.mp4', '.jpg');
                 const screenshots = r.screenshots || [thumbName];
                 const isFav = r.favorite || false;
+                const isSelected = selectedFiles.has(r.filename);
 
                 // Build screenshot preview images
                 const screenshotImgs = screenshots.map((s, idx) =>
@@ -547,9 +654,19 @@ INDEX_HTML = '''<!DOCTYPE html>
                     `<div class="segment" data-idx="${idx}"></div>`
                 ).join('');
 
+                // Card classes based on selection mode
+                const cardClasses = ['card'];
+                if (selectionMode) cardClasses.push('selectable');
+                if (isSelected) cardClasses.push('selected');
+
+                // Click handler based on selection mode
+                const thumbClick = selectionMode
+                    ? `onclick="toggleSelection('${r.filename}', event)"`
+                    : `onclick="openModal(${i})"`;
+
                 return `
-                    <div class="card">
-                        <div class="card-thumb" data-index="${i}" onclick="openModal(${i})" onmouseenter="startPreview(this)" onmouseleave="stopPreview(this)">
+                    <div class="${cardClasses.join(' ')}" data-filename="${r.filename}">
+                        <div class="card-thumb" data-index="${i}" ${thumbClick} onmouseenter="startPreview(this)" onmouseleave="stopPreview(this)">
                             <img class="main-thumb" src="/${thumbName}" alt="Thumbnail" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 320 180%22><rect fill=%22%23333%22 width=%22320%22 height=%22180%22/><text x=%22160%22 y=%2290%22 fill=%22%23666%22 text-anchor=%22middle%22>No preview</text></svg>'">
                             ${screenshotImgs}
                             ${isFav ? '<div class="favorite-badge">★</div>' : ''}
@@ -558,12 +675,12 @@ INDEX_HTML = '''<!DOCTYPE html>
                             ${screenshots.length > 1 ? `<div class="screenshot-progress">${progressSegments}</div>` : ''}
                         </div>
                         <div class="card-info">
-                            <div class="card-details" onclick="openModal(${i})">
+                            <div class="card-details" onclick="${selectionMode ? `toggleSelection('${r.filename}', event)` : `openModal(${i})`}">
                                 <div class="card-date">${formatDate(r.start_time)}</div>
                                 <div class="card-time">${formatTime(r.start_time)}</div>
                                 <div class="card-size">${formatSize(r.filesize)}</div>
                             </div>
-                            <div class="card-actions">
+                            <div class="card-actions" style="${selectionMode ? 'display:none' : ''}">
                                 <button class="btn-favorite ${isFav ? 'active' : ''}" onclick="toggleFavorite('${r.filename}', event)" title="${isFav ? 'Remove from favorites' : 'Add to favorites'}">${isFav ? '★' : '☆'}</button>
                                 <button class="btn-delete" onclick="confirmDelete('${r.filename}', event)">Delete</button>
                             </div>
@@ -722,6 +839,12 @@ INDEX_HTML = '''<!DOCTYPE html>
         }
 
         async function executeDelete() {
+            // Check if this is a bulk delete operation
+            if (bulkDeleteFiles.length > 0) {
+                await executeBulkDelete();
+                return;
+            }
+
             if (!deleteFilename) return;
             try {
                 const res = await fetch(`/api/recordings/${deleteFilename}`, { method: 'DELETE' });
@@ -729,6 +852,128 @@ INDEX_HTML = '''<!DOCTYPE html>
                     cancelDelete();
                     closeModal();
                     await loadRecordings();
+                } else {
+                    const err = await res.text();
+                    alert(`Failed to delete: ${err}`);
+                }
+            } catch (e) {
+                alert(`Error: ${e.message}`);
+            }
+        }
+
+        // Selection mode functions
+        function toggleSelectionMode() {
+            selectionMode = !selectionMode;
+            const btn = document.getElementById('btnToggleSelect');
+            const bar = document.getElementById('selectionBar');
+
+            if (selectionMode) {
+                btn.classList.add('active');
+                btn.textContent = 'Cancel';
+                bar.classList.add('active');
+            } else {
+                btn.classList.remove('active');
+                btn.textContent = 'Select';
+                bar.classList.remove('active');
+                selectedFiles.clear();
+            }
+            renderGrid();
+            updateSelectionCount();
+        }
+
+        function toggleSelection(filename, event) {
+            if (event) event.stopPropagation();
+            if (!selectionMode) return;
+
+            if (selectedFiles.has(filename)) {
+                selectedFiles.delete(filename);
+            } else {
+                selectedFiles.add(filename);
+            }
+
+            // Update card UI
+            const cards = document.querySelectorAll('.card.selectable');
+            cards.forEach(card => {
+                const cardFilename = card.dataset.filename;
+                if (cardFilename === filename) {
+                    card.classList.toggle('selected', selectedFiles.has(filename));
+                }
+            });
+
+            updateSelectionCount();
+        }
+
+        function selectAll() {
+            filteredRecordings.forEach(r => selectedFiles.add(r.filename));
+            renderGrid();
+            updateSelectionCount();
+        }
+
+        function selectAllExceptFavorites() {
+            filteredRecordings.forEach(r => {
+                if (!r.favorite) {
+                    selectedFiles.add(r.filename);
+                } else {
+                    selectedFiles.delete(r.filename);
+                }
+            });
+            renderGrid();
+            updateSelectionCount();
+        }
+
+        function deselectAll() {
+            selectedFiles.clear();
+            renderGrid();
+            updateSelectionCount();
+        }
+
+        function updateSelectionCount() {
+            const count = selectedFiles.size;
+            document.getElementById('selectionCount').textContent = count;
+            const deleteBtn = document.getElementById('btnDeleteSelected');
+            deleteBtn.disabled = count === 0;
+            if (count > 0) {
+                deleteBtn.textContent = `Delete Selected (${count})`;
+            } else {
+                deleteBtn.textContent = 'Delete Selected';
+            }
+        }
+
+        let bulkDeleteFiles = [];
+
+        function confirmDeleteSelected() {
+            if (selectedFiles.size === 0) return;
+            bulkDeleteFiles = Array.from(selectedFiles);
+            const favCount = bulkDeleteFiles.filter(f => {
+                const rec = recordings.find(r => r.filename === f);
+                return rec && rec.favorite;
+            }).length;
+
+            let message = `This will permanently delete ${bulkDeleteFiles.length} recording(s).`;
+            if (favCount > 0) {
+                message += ` Including ${favCount} favorite(s).`;
+            }
+            document.getElementById('confirmMessage').textContent = message;
+            document.getElementById('confirmDialog').classList.add('active');
+        }
+
+        async function executeBulkDelete() {
+            if (bulkDeleteFiles.length === 0) return;
+
+            try {
+                const res = await fetch('/api/recordings/bulk-delete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ filenames: bulkDeleteFiles })
+                });
+
+                if (res.ok) {
+                    const result = await res.json();
+                    selectedFiles.clear();
+                    bulkDeleteFiles = [];
+                    cancelDelete();
+                    await loadRecordings();
+                    updateSelectionCount();
                 } else {
                     const err = await res.text();
                     alert(`Failed to delete: ${err}`);
@@ -817,6 +1062,8 @@ class SecurityHTTPHandler(SimpleHTTPRequestHandler):
             self.handle_api_set_settings()
         elif self.path.startswith('/api/settings/'):
             self.handle_api_quick_settings()
+        elif self.path == '/api/recordings/bulk-delete':
+            self.handle_api_bulk_delete()
         elif self.path.endswith('/favorite'):
             self.handle_api_toggle_favorite()
         else:
@@ -962,6 +1209,110 @@ class SecurityHTTPHandler(SimpleHTTPRequestHandler):
 
         except Exception as e:
             logger.error(f"Error deleting recording: {e}")
+            self.send_error(500, str(e))
+
+    def handle_api_bulk_delete(self):
+        """Bulk delete recordings: POST /api/recordings/bulk-delete with JSON body {"filenames": [...]}"""
+        try:
+            content_length = int(self.headers.get('Content-Length', 0))
+            body = self.rfile.read(content_length).decode('utf-8')
+            data = json.loads(body)
+
+            filenames = data.get('filenames', [])
+            if not filenames:
+                self.send_error(400, "No filenames provided")
+                return
+
+            # Load metadata
+            metadata_file = Path(self.recordings_path) / "recordings.json"
+            if not metadata_file.exists():
+                self.send_error(404, "No recordings found")
+                return
+
+            with open(metadata_file, 'r') as f:
+                recordings = json.load(f)
+
+            recordings_dir = Path(self.recordings_path)
+            total_deleted = 0
+            total_files_removed = 0
+            errors = []
+
+            for filename in filenames:
+                if not filename.endswith('.mp4'):
+                    errors.append(f"Invalid filename: {filename}")
+                    continue
+
+                # Find the recording
+                recording_to_delete = None
+                for r in recordings:
+                    if r.get('filename') == filename:
+                        recording_to_delete = r
+                        break
+
+                if not recording_to_delete:
+                    errors.append(f"Recording not found: {filename}")
+                    continue
+
+                deleted_files = []
+
+                # Delete video file
+                video_path = recordings_dir / filename
+                if video_path.exists():
+                    video_path.unlink()
+                    deleted_files.append(filename)
+                    logger.info(f"Deleted video: {video_path}")
+
+                # Delete all screenshots
+                if recording_to_delete.get('screenshots'):
+                    for screenshot in recording_to_delete['screenshots']:
+                        screenshot_name = Path(screenshot).name
+                        screenshot_path = recordings_dir / screenshot_name
+                        if screenshot_path.exists():
+                            screenshot_path.unlink()
+                            deleted_files.append(screenshot_name)
+                            logger.info(f"Deleted screenshot: {screenshot_path}")
+
+                # Delete thumbnail if different from screenshots
+                if recording_to_delete.get('thumbnail'):
+                    thumb_name = Path(recording_to_delete['thumbnail']).name
+                    thumb_path = recordings_dir / thumb_name
+                    if thumb_path.exists():
+                        thumb_path.unlink()
+                        if thumb_name not in deleted_files:
+                            deleted_files.append(thumb_name)
+                        logger.info(f"Deleted thumbnail: {thumb_path}")
+
+                # Clean up orphan files
+                base_name = video_path.stem
+                for orphan_file in recordings_dir.glob(f"{base_name}*.jpg"):
+                    if orphan_file.name not in deleted_files:
+                        orphan_file.unlink()
+                        deleted_files.append(orphan_file.name)
+                        logger.info(f"Deleted orphan file: {orphan_file}")
+
+                # Remove from recordings list
+                recordings.remove(recording_to_delete)
+                total_deleted += 1
+                total_files_removed += len(deleted_files)
+
+            # Save updated metadata
+            with open(metadata_file, 'w') as f:
+                json.dump(recordings, f, indent=2)
+
+            logger.info(f"Bulk delete completed: {total_deleted} recordings, {total_files_removed} files removed")
+
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                "status": "ok",
+                "deleted_count": total_deleted,
+                "files_removed": total_files_removed,
+                "errors": errors if errors else None
+            }).encode())
+
+        except Exception as e:
+            logger.error(f"Error in bulk delete: {e}")
             self.send_error(500, str(e))
 
     def handle_api_toggle_favorite(self):
