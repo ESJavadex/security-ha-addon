@@ -1,6 +1,6 @@
 name: "Security Camera Motion Detection"
 description: "Motion detection and recording for HLS camera streams. Records clips when motion is detected and exposes sensors to Home Assistant."
-version: "0.1.10"
+version: "0.1.11"
 slug: "security_camera_motion"
 url: "https://github.com/ESJavadex/security-ha-addon"
 arch:
@@ -13,6 +13,11 @@ init: false
 boot: auto
 startup: services
 hassio_api: true
+ingress: true
+ingress_port: 8081
+ingress_stream: true
+panel_icon: "mdi:cctv"
+panel_title: "Security Recordings"
 ports:
   8081/tcp: 8081
 ports_description:
