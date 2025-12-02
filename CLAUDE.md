@@ -95,7 +95,9 @@ The ROI (Region of Interest) defines where motion is detected. Recordings are al
 
 ## Web UI
 
-Access the recordings viewer at `http://<host>:8081/`
+Access the recordings viewer via:
+- **Home Assistant sidebar** - Click "Security Recordings" in the HA sidebar (uses ingress)
+- **Direct URL** - `http://<host>:8081/`
 
 Features:
 - **Grid view** of all recordings with thumbnails

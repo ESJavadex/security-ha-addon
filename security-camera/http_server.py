@@ -14,12 +14,13 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Embedded HTML for the recordings viewer UI
-INDEX_HTML = '''<!DOCTYPE html>
+INDEX_HTML_TEMPLATE = '''<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Security Camera Recordings</title>
+    <script>window.BASE_PATH = "{base_path}";</script>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
@@ -563,9 +564,12 @@ INDEX_HTML = '''<!DOCTYPE html>
             return d.toISOString().split('T')[0];
         }
 
+        // Get base path for ingress support
+        const basePath = window.BASE_PATH || '';
+
         async function loadRecordings() {
             try {
-                const res = await fetch('/api/recordings');
+                const res = await fetch(basePath + '/api/recordings');
                 recordings = await res.json();
                 applyFilters();
             } catch (e) {
@@ -575,7 +579,7 @@ INDEX_HTML = '''<!DOCTYPE html>
 
         async function loadState() {
             try {
-                const res = await fetch('/api/state');
+                const res = await fetch(basePath + '/api/state');
                 const state = await res.json();
                 const dot = document.getElementById('statusDot');
                 const text = document.getElementById('statusText');
@@ -646,7 +650,7 @@ INDEX_HTML = '''<!DOCTYPE html>
 
                 // Build screenshot preview images
                 const screenshotImgs = screenshots.map((s, idx) =>
-                    `<img class="screenshot-preview" data-idx="${idx}" src="/${s}" alt="Preview ${idx + 1}">`
+                    `<img class="screenshot-preview" data-idx="${idx}" src="${basePath}/${s}" alt="Preview ${idx + 1}">`
                 ).join('');
 
                 // Build progress segments
@@ -667,7 +671,7 @@ INDEX_HTML = '''<!DOCTYPE html>
                 return `
                     <div class="${cardClasses.join(' ')}" data-filename="${r.filename}">
                         <div class="card-thumb" data-index="${i}" ${thumbClick} onmouseenter="startPreview(this)" onmouseleave="stopPreview(this)">
-                            <img class="main-thumb" src="/${thumbName}" alt="Thumbnail" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 320 180%22><rect fill=%22%23333%22 width=%22320%22 height=%22180%22/><text x=%22160%22 y=%2290%22 fill=%22%23666%22 text-anchor=%22middle%22>No preview</text></svg>'">
+                            <img class="main-thumb" src="${basePath}/${thumbName}" alt="Thumbnail" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 320 180%22><rect fill=%22%23333%22 width=%22320%22 height=%22180%22/><text x=%22160%22 y=%2290%22 fill=%22%23666%22 text-anchor=%22middle%22>No preview</text></svg>'">
                             ${screenshotImgs}
                             ${isFav ? '<div class="favorite-badge">★</div>' : ''}
                             <div class="play-icon"></div>
@@ -747,7 +751,7 @@ INDEX_HTML = '''<!DOCTYPE html>
             currentIndex = index;
             const r = filteredRecordings[index];
             const player = document.getElementById('player');
-            player.src = '/' + r.filename;
+            player.src = basePath + '/' + r.filename;
             document.getElementById('modalInfo').textContent = `${formatDate(r.start_time)} at ${formatTime(r.start_time)} - ${formatDuration(r.duration)}`;
             updateModalFavorite(r.favorite);
             document.getElementById('modal').classList.add('active');
@@ -797,7 +801,7 @@ INDEX_HTML = '''<!DOCTYPE html>
         async function toggleFavorite(filename, event) {
             if (event) event.stopPropagation();
             try {
-                const res = await fetch(`/api/recordings/${filename}/favorite`, { method: 'POST' });
+                const res = await fetch(basePath + `/api/recordings/${filename}/favorite`, { method: 'POST' });
                 if (res.ok) {
                     const data = await res.json();
                     // Update local data
@@ -847,7 +851,7 @@ INDEX_HTML = '''<!DOCTYPE html>
 
             if (!deleteFilename) return;
             try {
-                const res = await fetch(`/api/recordings/${deleteFilename}`, { method: 'DELETE' });
+                const res = await fetch(basePath + `/api/recordings/${deleteFilename}`, { method: 'DELETE' });
                 if (res.ok) {
                     cancelDelete();
                     closeModal();
@@ -961,7 +965,7 @@ INDEX_HTML = '''<!DOCTYPE html>
             if (bulkDeleteFiles.length === 0) return;
 
             try {
-                const res = await fetch('/api/recordings/bulk-delete', {
+                const res = await fetch(basePath + '/api/recordings/bulk-delete', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ filenames: bulkDeleteFiles })
@@ -1051,10 +1055,16 @@ class SecurityHTTPHandler(SimpleHTTPRequestHandler):
 
     def handle_index(self):
         """Serve the recordings viewer UI."""
+        # Get ingress path from Home Assistant header (empty string if not using ingress)
+        ingress_path = self.headers.get('X-Ingress-Path', '')
+
+        # Inject the base path into the HTML template
+        html = INDEX_HTML_TEMPLATE.format(base_path=ingress_path)
+
         self.send_response(200)
         self.send_header('Content-Type', 'text/html; charset=utf-8')
         self.end_headers()
-        self.wfile.write(INDEX_HTML.encode('utf-8'))
+        self.wfile.write(html.encode('utf-8'))
 
     def do_POST(self):
         """Handle POST requests."""
