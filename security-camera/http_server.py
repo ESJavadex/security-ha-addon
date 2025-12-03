@@ -851,7 +851,9 @@ INDEX_HTML_TEMPLATE = '''<!DOCTYPE html>
 
             if (!deleteFilename) return;
             try {
-                const res = await fetch(basePath + `/api/recordings/${deleteFilename}`, { method: 'DELETE' });
+                // Use POST /api/recordings/{filename}/delete for ingress compatibility
+                // (Home Assistant ingress converts DELETE to POST)
+                const res = await fetch(basePath + `/api/recordings/${deleteFilename}/delete`, { method: 'POST' });
                 if (res.ok) {
                     cancelDelete();
                     closeModal();
@@ -1083,6 +1085,9 @@ class SecurityHTTPHandler(SimpleHTTPRequestHandler):
             self.handle_api_quick_settings()
         elif parsed_path == '/api/recordings/bulk-delete':
             self.handle_api_bulk_delete()
+        elif parsed_path.endswith('/delete'):
+            # POST-based single file delete for ingress compatibility (HA ingress converts DELETE to POST)
+            self.handle_api_delete_recording_post()
         elif parsed_path.endswith('/favorite'):
             self.handle_api_toggle_favorite()
         else:
@@ -1135,6 +1140,22 @@ class SecurityHTTPHandler(SimpleHTTPRequestHandler):
         except Exception as e:
             self.send_error(500, str(e))
 
+    def handle_api_delete_recording_post(self):
+        """Delete a recording by filename via POST (for ingress compatibility): POST /api/recordings/{filename}/delete"""
+        try:
+            # Extract filename from path: /api/recordings/{filename}/delete
+            parsed_path = urlparse(self.path).path
+            parts = parsed_path.split('/')
+            if len(parts) < 5:
+                self.send_error(400, "Filename required")
+                return
+
+            filename = parts[3]
+            self._delete_recording_by_filename(filename)
+        except Exception as e:
+            logger.error(f"Error deleting recording (POST): {e}")
+            self.send_error(500, str(e))
+
     def handle_api_delete_recording(self):
         """Delete a recording by filename: DELETE /api/recordings/{filename}"""
         try:
@@ -1145,90 +1166,93 @@ class SecurityHTTPHandler(SimpleHTTPRequestHandler):
                 return
 
             filename = parts[3]
-            if not filename.endswith('.mp4'):
-                self.send_error(400, "Invalid filename")
-                return
-
-            # Load metadata
-            metadata_file = Path(self.recordings_path) / "recordings.json"
-            if not metadata_file.exists():
-                self.send_error(404, "No recordings found")
-                return
-
-            with open(metadata_file, 'r') as f:
-                recordings = json.load(f)
-
-            # Find and remove the recording
-            recording_to_delete = None
-            for r in recordings:
-                if r.get('filename') == filename:
-                    recording_to_delete = r
-                    break
-
-            if not recording_to_delete:
-                self.send_error(404, f"Recording not found: {filename}")
-                return
-
-            deleted_files = []
-            recordings_dir = Path(self.recordings_path)
-
-            # Delete video file
-            video_path = recordings_dir / filename
-            if video_path.exists():
-                video_path.unlink()
-                deleted_files.append(filename)
-                logger.info(f"Deleted video: {video_path}")
-            else:
-                logger.warning(f"Video file not found: {video_path}")
-
-            # Delete all screenshots from the array
-            if recording_to_delete.get('screenshots'):
-                for screenshot in recording_to_delete['screenshots']:
-                    # Handle both full path and just filename
-                    screenshot_name = Path(screenshot).name
-                    screenshot_path = recordings_dir / screenshot_name
-                    if screenshot_path.exists():
-                        screenshot_path.unlink()
-                        deleted_files.append(screenshot_name)
-                        logger.info(f"Deleted screenshot: {screenshot_path}")
-
-            # Also delete thumbnail if it's different from screenshots
-            if recording_to_delete.get('thumbnail'):
-                thumb_name = Path(recording_to_delete['thumbnail']).name
-                thumb_path = recordings_dir / thumb_name
-                if thumb_path.exists():
-                    thumb_path.unlink()
-                    if thumb_name not in deleted_files:
-                        deleted_files.append(thumb_name)
-                    logger.info(f"Deleted thumbnail: {thumb_path}")
-
-            # Clean up any orphan files with the same base name (e.g., motion_20241127_143022_*.jpg)
-            base_name = video_path.stem  # e.g., "motion_20241127_143022"
-            for orphan_file in recordings_dir.glob(f"{base_name}*.jpg"):
-                if orphan_file.name not in deleted_files:
-                    orphan_file.unlink()
-                    deleted_files.append(orphan_file.name)
-                    logger.info(f"Deleted orphan file: {orphan_file}")
-
-            # Update metadata - remove from list
-            recordings.remove(recording_to_delete)
-            with open(metadata_file, 'w') as f:
-                json.dump(recordings, f, indent=2)
-
-            logger.info(f"Recording deleted: {filename}, total files removed: {len(deleted_files)}")
-
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json')
-            self.end_headers()
-            self.wfile.write(json.dumps({
-                "status": "ok",
-                "deleted": filename,
-                "files_removed": len(deleted_files)
-            }).encode())
-
+            self._delete_recording_by_filename(filename)
         except Exception as e:
             logger.error(f"Error deleting recording: {e}")
             self.send_error(500, str(e))
+
+    def _delete_recording_by_filename(self, filename: str):
+        """Shared logic to delete a recording by filename."""
+        if not filename.endswith('.mp4'):
+            self.send_error(400, "Invalid filename")
+            return
+
+        # Load metadata
+        metadata_file = Path(self.recordings_path) / "recordings.json"
+        if not metadata_file.exists():
+            self.send_error(404, "No recordings found")
+            return
+
+        with open(metadata_file, 'r') as f:
+            recordings = json.load(f)
+
+        # Find and remove the recording
+        recording_to_delete = None
+        for r in recordings:
+            if r.get('filename') == filename:
+                recording_to_delete = r
+                break
+
+        if not recording_to_delete:
+            self.send_error(404, f"Recording not found: {filename}")
+            return
+
+        deleted_files = []
+        recordings_dir = Path(self.recordings_path)
+
+        # Delete video file
+        video_path = recordings_dir / filename
+        if video_path.exists():
+            video_path.unlink()
+            deleted_files.append(filename)
+            logger.info(f"Deleted video: {video_path}")
+        else:
+            logger.warning(f"Video file not found: {video_path}")
+
+        # Delete all screenshots from the array
+        if recording_to_delete.get('screenshots'):
+            for screenshot in recording_to_delete['screenshots']:
+                # Handle both full path and just filename
+                screenshot_name = Path(screenshot).name
+                screenshot_path = recordings_dir / screenshot_name
+                if screenshot_path.exists():
+                    screenshot_path.unlink()
+                    deleted_files.append(screenshot_name)
+                    logger.info(f"Deleted screenshot: {screenshot_path}")
+
+        # Also delete thumbnail if it's different from screenshots
+        if recording_to_delete.get('thumbnail'):
+            thumb_name = Path(recording_to_delete['thumbnail']).name
+            thumb_path = recordings_dir / thumb_name
+            if thumb_path.exists():
+                thumb_path.unlink()
+                if thumb_name not in deleted_files:
+                    deleted_files.append(thumb_name)
+                logger.info(f"Deleted thumbnail: {thumb_path}")
+
+        # Clean up any orphan files with the same base name (e.g., motion_20241127_143022_*.jpg)
+        base_name = video_path.stem  # e.g., "motion_20241127_143022"
+        for orphan_file in recordings_dir.glob(f"{base_name}*.jpg"):
+            if orphan_file.name not in deleted_files:
+                orphan_file.unlink()
+                deleted_files.append(orphan_file.name)
+                logger.info(f"Deleted orphan file: {orphan_file}")
+
+        # Update metadata - remove from list
+        recordings.remove(recording_to_delete)
+        with open(metadata_file, 'w') as f:
+            json.dump(recordings, f, indent=2)
+
+        logger.info(f"Recording deleted: {filename}, total files removed: {len(deleted_files)}")
+
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.end_headers()
+        self.wfile.write(json.dumps({
+            "status": "ok",
+            "deleted": filename,
+            "files_removed": len(deleted_files)
+        }).encode())
 
     def handle_api_bulk_delete(self):
         """Bulk delete recordings: POST /api/recordings/bulk-delete with JSON body {"filenames": [...]}"""
