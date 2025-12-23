@@ -12,8 +12,11 @@ import logging
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, List
-from dataclasses import dataclass, asdict
+from typing import Optional, List, TYPE_CHECKING
+from dataclasses import dataclass, asdict, field
+
+if TYPE_CHECKING:
+    from llm_analyzer import LLMAnalyzer, LLMAnalysisResult
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +32,8 @@ class Recording:
     filesize: Optional[int] = None
     thumbnail: Optional[str] = None
     screenshots: Optional[List[str]] = None  # List of screenshot filenames
+    favorite: bool = False  # User-marked as important
+    llm_analysis: Optional[dict] = None  # LLM analysis result
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -53,6 +58,8 @@ class RecordingManager:
         post_roll: int = 5,
         max_recordings: int = 50,
         max_duration: int = 300,  # 5 minutes max per clip
+        llm_analyzer: Optional['LLMAnalyzer'] = None,
+        llm_auto_analyze: bool = False,
     ):
         """
         Initialize recording manager.
@@ -64,6 +71,8 @@ class RecordingManager:
             post_roll: Seconds to continue after motion ends
             max_recordings: Maximum recordings to keep
             max_duration: Maximum recording duration in seconds
+            llm_analyzer: Optional LLM analyzer for false positive detection
+            llm_auto_analyze: Whether to automatically analyze new recordings
         """
         self.stream_url = stream_url
         self.recordings_path = Path(recordings_path)
@@ -71,6 +80,8 @@ class RecordingManager:
         self.post_roll = post_roll
         self.max_recordings = max_recordings
         self.max_duration = max_duration
+        self.llm_analyzer = llm_analyzer
+        self.llm_auto_analyze = llm_auto_analyze
 
         # State
         self._recording = False
@@ -104,6 +115,113 @@ class RecordingManager:
                 json.dump([r.to_dict() for r in self._recordings], f, indent=2)
         except Exception as e:
             logger.error(f"Error saving metadata: {e}")
+
+    def _trigger_llm_analysis(self, filename: str, screenshots: List[str]):
+        """
+        Trigger async LLM analysis for a recording.
+
+        Args:
+            filename: Recording filename
+            screenshots: List of screenshot filenames
+        """
+        if not self.llm_analyzer:
+            return
+
+        def analyze():
+            try:
+                self.llm_analyzer.mark_analysis_started(filename)
+                result = self.llm_analyzer.analyze_recording(
+                    filename, screenshots, self.recordings_path
+                )
+                self._update_recording_with_analysis(filename, result)
+            except Exception as e:
+                logger.error(f"LLM analysis failed for {filename}: {e}")
+            finally:
+                self.llm_analyzer.mark_analysis_complete(filename)
+
+        thread = threading.Thread(target=analyze, daemon=True)
+        thread.start()
+        logger.info(f"LLM analysis started for {filename}")
+
+    def _update_recording_with_analysis(self, filename: str, result: 'LLMAnalysisResult'):
+        """
+        Update recording metadata with LLM analysis result.
+
+        Args:
+            filename: Recording filename
+            result: LLM analysis result
+        """
+        with self._lock:
+            for recording in self._recordings:
+                if recording.filename == filename:
+                    recording.llm_analysis = result.to_dict()
+                    self._save_metadata()
+                    logger.info(
+                        f"LLM analysis saved for {filename}: "
+                        f"false_positive={result.is_false_positive}, "
+                        f"confidence={result.confidence}"
+                    )
+                    break
+
+    def analyze_recording_on_demand(self, filename: str) -> bool:
+        """
+        Trigger on-demand LLM analysis for a specific recording.
+
+        Args:
+            filename: Recording filename to analyze
+
+        Returns:
+            True if analysis was started, False if not possible
+        """
+        if not self.llm_analyzer:
+            logger.warning("LLM analyzer not configured")
+            return False
+
+        # Find the recording
+        recording = None
+        for r in self._recordings:
+            if r.filename == filename:
+                recording = r
+                break
+
+        if not recording:
+            logger.warning(f"Recording not found: {filename}")
+            return False
+
+        if not recording.screenshots:
+            logger.warning(f"No screenshots available for {filename}")
+            return False
+
+        if self.llm_analyzer.is_analysis_pending(filename):
+            logger.warning(f"Analysis already in progress for {filename}")
+            return False
+
+        self._trigger_llm_analysis(filename, recording.screenshots)
+        return True
+
+    def set_false_positive(self, filename: str, is_false_positive: bool) -> bool:
+        """
+        Manually set or clear false positive flag for a recording.
+
+        Args:
+            filename: Recording filename
+            is_false_positive: Whether to mark as false positive
+
+        Returns:
+            True if updated, False if not found
+        """
+        with self._lock:
+            for recording in self._recordings:
+                if recording.filename == filename:
+                    if recording.llm_analysis is None:
+                        recording.llm_analysis = {}
+                    recording.llm_analysis['is_false_positive'] = is_false_positive
+                    recording.llm_analysis['confidence'] = 'manual'
+                    recording.llm_analysis['description'] = 'Manually set by user'
+                    self._save_metadata()
+                    logger.info(f"Manual false positive set for {filename}: {is_false_positive}")
+                    return True
+        return False
 
     def _generate_filename(self) -> str:
         """Generate a unique filename for the recording."""
@@ -351,6 +469,13 @@ class RecordingManager:
                         f"({self._current_recording.duration:.1f}s, "
                         f"{self._current_recording.filesize / 1024 / 1024:.1f}MB)"
                     )
+
+                    # Trigger LLM analysis if auto-analyze is enabled
+                    if self.llm_analyzer and self.llm_auto_analyze and screenshots:
+                        self._trigger_llm_analysis(
+                            self._current_recording.filename,
+                            screenshots
+                        )
                 else:
                     logger.error(f"Recording file not found: {filepath}")
 

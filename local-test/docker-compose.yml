@@ -13,6 +13,12 @@ services:
       - RECORDINGS_PATH=/share/security_recordings
       - MAX_RECORDINGS=${MAX_RECORDINGS:-50}
       - LOG_LEVEL=${LOG_LEVEL:-debug}
+      - LLM_ENABLED=${LLM_ENABLED:-false}
+      - LLM_AUTO_ANALYZE=${LLM_AUTO_ANALYZE:-false}
+      - LLM_API_URL=${LLM_API_URL:-}
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - LLM_MODEL=${LLM_MODEL:-llava}
+      - LLM_TIMEOUT=${LLM_TIMEOUT:-60}
     ports:
       - "8081:8081"
     volumes:
