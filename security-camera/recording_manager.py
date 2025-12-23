@@ -316,41 +316,66 @@ class RecordingManager:
         return screenshots
 
     def _cleanup_old_recordings(self):
-        """Remove old recordings if exceeding max_recordings."""
-        if len(self._recordings) <= self.max_recordings:
-            return
+        """Remove old recordings based on limits and false positive age."""
+        recordings_to_remove = []
 
-        # Sort by start_time, oldest first
-        sorted_recordings = sorted(self._recordings, key=lambda r: r.start_time)
+        # 1. Auto-delete false positives older than 72 hours
+        now = time.time()
+        fp_max_age_hours = 72
+        fp_max_age_seconds = fp_max_age_hours * 3600
 
-        # Remove oldest recordings
-        to_remove = len(self._recordings) - self.max_recordings
-        for recording in sorted_recordings[:to_remove]:
-            try:
-                # Delete video file
-                video_path = Path(recording.filepath)
-                if video_path.exists():
-                    video_path.unlink()
+        for recording in self._recordings:
+            if recording.llm_analysis:
+                analysis = recording.llm_analysis
+                is_fp = analysis.get('is_false_positive', False)
+                if is_fp and recording.start_time:
+                    age_seconds = now - recording.start_time
+                    if age_seconds > fp_max_age_seconds:
+                        recordings_to_remove.append(recording)
+                        logger.info(f"Auto-removing false positive (>72h): {recording.filename}")
 
-                # Delete all screenshots
-                if recording.screenshots:
-                    for screenshot in recording.screenshots:
-                        screenshot_path = video_path.parent / screenshot
-                        if screenshot_path.exists():
-                            screenshot_path.unlink()
-                elif recording.thumbnail:
-                    # Fallback for old recordings with single thumbnail
-                    thumb_path = Path(recording.thumbnail)
-                    if thumb_path.exists():
-                        thumb_path.unlink()
+        # 2. Remove oldest if exceeding max_recordings (0 = unlimited)
+        if self.max_recordings > 0:
+            remaining = [r for r in self._recordings if r not in recordings_to_remove]
+            if len(remaining) > self.max_recordings:
+                sorted_recordings = sorted(remaining, key=lambda r: r.start_time)
+                to_remove_count = len(remaining) - self.max_recordings
+                for recording in sorted_recordings[:to_remove_count]:
+                    if recording not in recordings_to_remove:
+                        recordings_to_remove.append(recording)
+                        logger.info(f"Removing old recording (over limit): {recording.filename}")
 
+        # Delete the recordings
+        for recording in recordings_to_remove:
+            self._delete_recording_files(recording)
+            if recording in self._recordings:
                 self._recordings.remove(recording)
-                logger.info(f"Removed old recording: {recording.filename}")
 
-            except Exception as e:
-                logger.error(f"Error removing recording {recording.filename}: {e}")
+        if recordings_to_remove:
+            self._save_metadata()
 
-        self._save_metadata()
+    def _delete_recording_files(self, recording):
+        """Delete all files associated with a recording."""
+        try:
+            # Delete video file
+            video_path = Path(recording.filepath)
+            if video_path.exists():
+                video_path.unlink()
+
+            # Delete all screenshots
+            if recording.screenshots:
+                for screenshot in recording.screenshots:
+                    screenshot_path = video_path.parent / screenshot
+                    if screenshot_path.exists():
+                        screenshot_path.unlink()
+            elif recording.thumbnail:
+                # Fallback for old recordings with single thumbnail
+                thumb_path = Path(recording.thumbnail)
+                if thumb_path.exists():
+                    thumb_path.unlink()
+
+        except Exception as e:
+            logger.error(f"Error removing recording files {recording.filename}: {e}")
 
     def start_recording(self, motion_start_time: Optional[float] = None):
         """

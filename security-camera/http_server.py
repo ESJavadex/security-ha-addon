@@ -191,6 +191,33 @@ INDEX_HTML_TEMPLATE = '''<!DOCTYPE html>
         .card-date { font-size: 1rem; font-weight: 500; }
         .card-time { font-size: 0.85rem; color: #aaa; margin-top: 0.25rem; }
         .card-size { font-size: 0.8rem; color: #666; margin-top: 0.5rem; }
+        .card-analysis {
+            padding: 0.5rem 1rem 1rem;
+            border-top: 1px solid #333;
+            font-size: 0.8rem;
+        }
+        .analysis-desc {
+            color: #aaa;
+            margin-bottom: 0.5rem;
+            font-style: italic;
+        }
+        .analysis-tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.3rem;
+        }
+        .analysis-tag {
+            background: #1e3a5f;
+            color: #60a5fa;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.7rem;
+        }
+        .analysis-tag.person { background: #3b2f5c; color: #a78bfa; }
+        .analysis-tag.vehicle { background: #3b3b2f; color: #fbbf24; }
+        .analysis-tag.animal { background: #2f3b3b; color: #34d399; }
+        .analysis-tag.delivery { background: #3b2f2f; color: #f87171; }
+        .analysis-tag.fp { background: #4b4b4b; color: #999; }
         .btn-delete {
             background: transparent;
             border: 1px solid #dc2626;
@@ -269,8 +296,27 @@ INDEX_HTML_TEMPLATE = '''<!DOCTYPE html>
             position: absolute;
             top: 8px;
             right: 8px;
-            background: #f59e0b;
-            color: #000;
+            background: #6b7280;
+            color: #fff;
+        }
+        .person-badge {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            background: #dc2626;
+            color: #fff;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            font-weight: bold;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+        }
+        .analyzed-badge {
+            position: absolute;
+            top: 8px;
+            right: 50px;
+            background: #059669;
+            color: #fff;
             padding: 2px 6px;
             border-radius: 4px;
             font-size: 0.7rem;
@@ -535,7 +581,9 @@ INDEX_HTML_TEMPLATE = '''<!DOCTYPE html>
         <div class="selection-controls">
             <button class="btn-selection" onclick="selectAll()">Select All</button>
             <button class="btn-selection" onclick="selectAllExceptFavorites()">All Except Favorites</button>
+            <button class="btn-selection" onclick="selectUnanalyzed()">Unanalyzed</button>
             <button class="btn-selection" onclick="deselectAll()">Deselect All</button>
+            <button class="btn-selection" id="btnAnalyzeSelected" onclick="analyzeSelected()" disabled style="background:#059669">Analyze Selected</button>
             <button class="btn-selection danger" id="btnDeleteSelected" onclick="confirmDeleteSelected()" disabled>Delete Selected</button>
         </div>
     </div>
@@ -714,6 +762,7 @@ INDEX_HTML_TEMPLATE = '''<!DOCTYPE html>
                 const analysis = r.llm_analysis || null;
                 const isFP = analysis && analysis.is_false_positive;
                 const isAnalyzed = analysis !== null;
+                const hasPerson = analysis && analysis.has_person;
 
                 // Build screenshot preview images
                 const screenshotImgs = screenshots.map((s, idx) =>
@@ -741,7 +790,8 @@ INDEX_HTML_TEMPLATE = '''<!DOCTYPE html>
                             <img class="main-thumb" src="${basePath}/${thumbName}" alt="Thumbnail" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 320 180%22><rect fill=%22%23333%22 width=%22320%22 height=%22180%22/><text x=%22160%22 y=%2290%22 fill=%22%23666%22 text-anchor=%22middle%22>No preview</text></svg>'">
                             ${screenshotImgs}
                             ${isFav ? '<div class="favorite-badge">★</div>' : ''}
-                            ${isFP ? '<div class="fp-badge">FP</div>' : ''}
+                            ${isAnalyzed ? '<div class="analyzed-badge">✓</div>' : ''}
+                            ${hasPerson ? '<div class="person-badge">👤 PERSON</div>' : (isFP ? '<div class="fp-badge">FP</div>' : '')}
                             <div class="play-icon"></div>
                             <div class="duration">${formatDuration(r.duration)}</div>
                             ${screenshots.length > 1 ? `<div class="screenshot-progress">${progressSegments}</div>` : ''}
@@ -758,6 +808,19 @@ INDEX_HTML_TEMPLATE = '''<!DOCTYPE html>
                                 <button class="btn-delete" onclick="confirmDelete('${r.filename}', event)">Delete</button>
                             </div>
                         </div>
+                        ${isAnalyzed ? `
+                        <div class="card-analysis">
+                            <div class="analysis-desc">${r.llm_analysis.description || ''}</div>
+                            <div class="analysis-tags">
+                                ${r.llm_analysis.has_person ? '<span class="analysis-tag person">👤 Person</span>' : ''}
+                                ${r.llm_analysis.has_vehicle ? '<span class="analysis-tag vehicle">🚗 Vehicle</span>' : ''}
+                                ${r.llm_analysis.has_animal ? '<span class="analysis-tag animal">🐾 Animal</span>' : ''}
+                                ${r.llm_analysis.has_delivery ? '<span class="analysis-tag delivery">📦 Delivery</span>' : ''}
+                                ${r.llm_analysis.is_false_positive ? '<span class="analysis-tag fp">False Positive</span>' : ''}
+                                <span class="analysis-tag">${r.llm_analysis.confidence} conf</span>
+                            </div>
+                        </div>
+                        ` : ''}
                     </div>
                 `;
             }).join('');
@@ -1035,12 +1098,57 @@ INDEX_HTML_TEMPLATE = '''<!DOCTYPE html>
             const count = selectedFiles.size;
             document.getElementById('selectionCount').textContent = count;
             const deleteBtn = document.getElementById('btnDeleteSelected');
+            const analyzeBtn = document.getElementById('btnAnalyzeSelected');
             deleteBtn.disabled = count === 0;
+            analyzeBtn.disabled = count === 0 || !llmConfigured;
             if (count > 0) {
                 deleteBtn.textContent = `Delete Selected (${count})`;
+                analyzeBtn.textContent = `Analyze Selected (${count})`;
             } else {
                 deleteBtn.textContent = 'Delete Selected';
+                analyzeBtn.textContent = 'Analyze Selected';
             }
+        }
+
+        function selectUnanalyzed() {
+            filteredRecordings.forEach(r => {
+                if (!r.llm_analysis) {
+                    selectedFiles.add(r.filename);
+                }
+            });
+            applyFilters();
+            updateSelectionCount();
+        }
+
+        let analyzingBulk = false;
+        async function analyzeSelected() {
+            if (selectedFiles.size === 0 || !llmConfigured || analyzingBulk) return;
+            const filenames = Array.from(selectedFiles);
+            analyzingBulk = true;
+            const analyzeBtn = document.getElementById('btnAnalyzeSelected');
+            analyzeBtn.textContent = `Analyzing... (0/${filenames.length})`;
+            analyzeBtn.disabled = true;
+
+            let completed = 0;
+            for (const filename of filenames) {
+                try {
+                    const res = await fetch(basePath + `/api/recordings/${filename}/analyze`, { method: 'POST' });
+                    if (res.ok) {
+                        const data = await res.json();
+                        const rec = recordings.find(r => r.filename === filename);
+                        if (rec) rec.llm_analysis = data.analysis;
+                    }
+                } catch (e) {
+                    console.error(`Failed to analyze ${filename}:`, e);
+                }
+                completed++;
+                analyzeBtn.textContent = `Analyzing... (${completed}/${filenames.length})`;
+            }
+
+            analyzingBulk = false;
+            selectedFiles.clear();
+            applyFilters();
+            updateSelectionCount();
         }
 
         let bulkDeleteFiles = [];
