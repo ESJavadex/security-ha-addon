@@ -265,6 +265,39 @@ INDEX_HTML_TEMPLATE = '''<!DOCTYPE html>
             font-size: 1.2rem;
             text-shadow: 0 1px 3px rgba(0,0,0,0.8);
         }
+        .fp-badge {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            background: #f59e0b;
+            color: #000;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.7rem;
+            font-weight: bold;
+        }
+        .btn-analyze {
+            background: #3b82f6;
+            color: #fff;
+            border: none;
+            padding: 4px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.75rem;
+        }
+        .btn-analyze:hover { background: #2563eb; }
+        .btn-analyze:disabled { background: #555; cursor: not-allowed; }
+        .btn-analyze.analyzing {
+            background: #6366f1;
+            animation: pulse 1s infinite;
+        }
+        .analysis-info {
+            font-size: 0.75rem;
+            color: #888;
+            margin-top: 4px;
+        }
+        .analysis-info.fp { color: #f59e0b; }
+        .analysis-info.real { color: #4ade80; }
         .modal-favorite {
             background: transparent;
             border: 2px solid #f59e0b;
@@ -481,6 +514,12 @@ INDEX_HTML_TEMPLATE = '''<!DOCTYPE html>
                 <option value="all">All recordings</option>
                 <option value="favorites">Favorites only</option>
             </select>
+            <select id="filterAnalysis">
+                <option value="all">All analysis</option>
+                <option value="real">Real activity</option>
+                <option value="fp">False positives</option>
+                <option value="unanalyzed">Not analyzed</option>
+            </select>
             <input type="date" id="filterDate">
             <select id="filterSort">
                 <option value="newest">Newest first</option>
@@ -539,6 +578,7 @@ INDEX_HTML_TEMPLATE = '''<!DOCTYPE html>
         let currentIndex = 0;
         let selectionMode = false;
         let selectedFiles = new Set();
+        let llmConfigured = false;
 
         function formatDate(ts) {
             const d = new Date(ts * 1000);
@@ -598,15 +638,39 @@ INDEX_HTML_TEMPLATE = '''<!DOCTYPE html>
             }
         }
 
+        async function loadLLMStatus() {
+            try {
+                const res = await fetch(basePath + '/api/llm/status');
+                const status = await res.json();
+                llmConfigured = status.configured;
+                // Hide analysis filter if LLM not configured
+                if (!llmConfigured) {
+                    document.getElementById('filterAnalysis').style.display = 'none';
+                }
+            } catch (e) {
+                console.error('Failed to load LLM status:', e);
+                llmConfigured = false;
+            }
+        }
+
         function applyFilters() {
             const dateFilter = document.getElementById('filterDate').value;
             const sort = document.getElementById('filterSort').value;
             const favFilter = document.getElementById('filterFavorites').value;
+            const analysisFilter = document.getElementById('filterAnalysis').value;
 
             filteredRecordings = [...recordings];
 
             if (favFilter === 'favorites') {
                 filteredRecordings = filteredRecordings.filter(r => r.favorite);
+            }
+
+            if (analysisFilter === 'real') {
+                filteredRecordings = filteredRecordings.filter(r => r.llm_analysis && !r.llm_analysis.is_false_positive);
+            } else if (analysisFilter === 'fp') {
+                filteredRecordings = filteredRecordings.filter(r => r.llm_analysis && r.llm_analysis.is_false_positive);
+            } else if (analysisFilter === 'unanalyzed') {
+                filteredRecordings = filteredRecordings.filter(r => !r.llm_analysis);
             }
 
             if (dateFilter) {
@@ -647,6 +711,9 @@ INDEX_HTML_TEMPLATE = '''<!DOCTYPE html>
                 const screenshots = r.screenshots || [thumbName];
                 const isFav = r.favorite || false;
                 const isSelected = selectedFiles.has(r.filename);
+                const analysis = r.llm_analysis || null;
+                const isFP = analysis && analysis.is_false_positive;
+                const isAnalyzed = analysis !== null;
 
                 // Build screenshot preview images
                 const screenshotImgs = screenshots.map((s, idx) =>
@@ -674,6 +741,7 @@ INDEX_HTML_TEMPLATE = '''<!DOCTYPE html>
                             <img class="main-thumb" src="${basePath}/${thumbName}" alt="Thumbnail" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 320 180%22><rect fill=%22%23333%22 width=%22320%22 height=%22180%22/><text x=%22160%22 y=%2290%22 fill=%22%23666%22 text-anchor=%22middle%22>No preview</text></svg>'">
                             ${screenshotImgs}
                             ${isFav ? '<div class="favorite-badge">★</div>' : ''}
+                            ${isFP ? '<div class="fp-badge">FP</div>' : ''}
                             <div class="play-icon"></div>
                             <div class="duration">${formatDuration(r.duration)}</div>
                             ${screenshots.length > 1 ? `<div class="screenshot-progress">${progressSegments}</div>` : ''}
@@ -686,6 +754,7 @@ INDEX_HTML_TEMPLATE = '''<!DOCTYPE html>
                             </div>
                             <div class="card-actions" style="${selectionMode ? 'display:none' : ''}">
                                 <button class="btn-favorite ${isFav ? 'active' : ''}" onclick="toggleFavorite('${r.filename}', event)" title="${isFav ? 'Remove from favorites' : 'Add to favorites'}">${isFav ? '★' : '☆'}</button>
+                                ${llmConfigured ? `<button class="btn-analyze" onclick="analyzeRecording('${r.filename}', event)" title="${isAnalyzed ? 'Re-analyze' : 'Analyze with AI'}">${isAnalyzed ? '↻' : '🔍'}</button>` : ''}
                                 <button class="btn-delete" onclick="confirmDelete('${r.filename}', event)">Delete</button>
                             </div>
                         </div>
@@ -797,6 +866,35 @@ INDEX_HTML_TEMPLATE = '''<!DOCTYPE html>
         document.getElementById('filterDate').addEventListener('change', applyFilters);
         document.getElementById('filterSort').addEventListener('change', applyFilters);
         document.getElementById('filterFavorites').addEventListener('change', applyFilters);
+        document.getElementById('filterAnalysis').addEventListener('change', applyFilters);
+
+        async function analyzeRecording(filename, event) {
+            if (event) event.stopPropagation();
+            const btn = event.target;
+            btn.disabled = true;
+            btn.classList.add('analyzing');
+            btn.textContent = '...';
+
+            try {
+                const res = await fetch(basePath + `/api/recordings/${filename}/analyze`, { method: 'POST' });
+                if (res.ok) {
+                    const data = await res.json();
+                    // Update local data
+                    const rec = recordings.find(r => r.filename === filename);
+                    if (rec) rec.llm_analysis = data.analysis;
+                    applyFilters();
+                } else {
+                    const err = await res.text();
+                    alert('Analysis failed: ' + err);
+                }
+            } catch (e) {
+                console.error('Failed to analyze:', e);
+                alert('Analysis failed: ' + e.message);
+            } finally {
+                btn.disabled = false;
+                btn.classList.remove('analyzing');
+            }
+        }
 
         async function toggleFavorite(filename, event) {
             if (event) event.stopPropagation();
@@ -994,6 +1092,7 @@ INDEX_HTML_TEMPLATE = '''<!DOCTYPE html>
             }
         }
 
+        loadLLMStatus();
         loadRecordings();
         loadState();
         setInterval(loadState, 5000);
@@ -1054,6 +1153,8 @@ class SecurityHTTPHandler(SimpleHTTPRequestHandler):
             self.handle_api_health()
         elif self.path == '/api/settings':
             self.handle_api_get_settings()
+        elif self.path == '/api/llm/status':
+            self.handle_api_llm_status()
         elif self.path.startswith('/api/'):
             self.send_error(404, "API endpoint not found")
         else:
@@ -1090,6 +1191,10 @@ class SecurityHTTPHandler(SimpleHTTPRequestHandler):
             self.handle_api_delete_recording_post()
         elif parsed_path.endswith('/favorite'):
             self.handle_api_toggle_favorite()
+        elif parsed_path.endswith('/analyze'):
+            self.handle_api_analyze_recording()
+        elif parsed_path.endswith('/false-positive'):
+            self.handle_api_toggle_false_positive()
         else:
             self.send_error(404, "API endpoint not found")
 
@@ -1429,6 +1534,181 @@ class SecurityHTTPHandler(SimpleHTTPRequestHandler):
 
         except Exception as e:
             logger.error(f"Error toggling favorite: {e}")
+            self.send_error(500, str(e))
+
+    def handle_api_analyze_recording(self):
+        """Trigger LLM analysis: POST /api/recordings/{filename}/analyze"""
+        try:
+            # Parse query parameters (for save_composite option)
+            from urllib.parse import urlparse, parse_qs
+            parsed = urlparse(self.path)
+            query_params = parse_qs(parsed.query)
+            save_composite = query_params.get('save_composite', ['false'])[0].lower() == 'true'
+
+            # Extract filename from path: /api/recordings/{filename}/analyze
+            parts = parsed.path.split('/')
+            if len(parts) < 5:
+                self.send_error(400, "Filename required")
+                return
+
+            filename = parts[3]
+            if not filename.endswith('.mp4'):
+                self.send_error(400, "Invalid filename")
+                return
+
+            # Check if LLM is configured
+            llm_enabled = os.environ.get('LLM_ENABLED', 'false').lower() == 'true'
+            llm_api_url = os.environ.get('LLM_API_URL', '')
+
+            if not llm_enabled or not llm_api_url:
+                self.send_error(400, "LLM analysis is not configured")
+                return
+
+            # Load metadata to get screenshots
+            metadata_file = Path(self.recordings_path) / "recordings.json"
+            if not metadata_file.exists():
+                self.send_error(404, "No recordings found")
+                return
+
+            with open(metadata_file, 'r') as f:
+                recordings = json.load(f)
+
+            # Find recording
+            recording = None
+            for r in recordings:
+                if r.get('filename') == filename:
+                    recording = r
+                    break
+
+            if not recording:
+                self.send_error(404, f"Recording not found: {filename}")
+                return
+
+            screenshots = recording.get('screenshots', [])
+            if not screenshots:
+                self.send_error(400, "No screenshots available for analysis")
+                return
+
+            # Import and run analysis
+            from llm_analyzer import LLMAnalyzer
+
+            analyzer = LLMAnalyzer(
+                api_url=llm_api_url,
+                model_name=os.environ.get('LLM_MODEL', 'llava'),
+                api_key=os.environ.get('LLM_API_KEY') or None,
+                timeout=int(os.environ.get('LLM_TIMEOUT', 60))
+            )
+
+            # Run analysis (this may take a while)
+            result = analyzer.analyze_recording(
+                filename, screenshots, Path(self.recordings_path),
+                save_composite=save_composite
+            )
+
+            # Update metadata
+            recording['llm_analysis'] = result.to_dict()
+            with open(metadata_file, 'w') as f:
+                json.dump(recordings, f, indent=2)
+
+            logger.info(f"LLM analysis complete for {filename}: false_positive={result.is_false_positive}")
+
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                "status": "ok",
+                "filename": filename,
+                "analysis": result.to_dict()
+            }).encode())
+
+        except Exception as e:
+            logger.error(f"Error analyzing recording: {e}")
+            self.send_error(500, str(e))
+
+    def handle_api_toggle_false_positive(self):
+        """Manually toggle false positive: POST /api/recordings/{filename}/false-positive"""
+        try:
+            # Extract filename from path
+            parts = self.path.split('/')
+            if len(parts) < 5:
+                self.send_error(400, "Filename required")
+                return
+
+            filename = parts[3]
+            if not filename.endswith('.mp4'):
+                self.send_error(400, "Invalid filename")
+                return
+
+            # Load metadata
+            metadata_file = Path(self.recordings_path) / "recordings.json"
+            if not metadata_file.exists():
+                self.send_error(404, "No recordings found")
+                return
+
+            with open(metadata_file, 'r') as f:
+                recordings = json.load(f)
+
+            # Find recording
+            recording = None
+            for r in recordings:
+                if r.get('filename') == filename:
+                    recording = r
+                    break
+
+            if not recording:
+                self.send_error(404, f"Recording not found: {filename}")
+                return
+
+            # Toggle false positive
+            if recording.get('llm_analysis') is None:
+                recording['llm_analysis'] = {}
+
+            current_fp = recording['llm_analysis'].get('is_false_positive', False)
+            recording['llm_analysis']['is_false_positive'] = not current_fp
+            recording['llm_analysis']['confidence'] = 'manual'
+            recording['llm_analysis']['description'] = 'Manually set by user'
+
+            # Save metadata
+            with open(metadata_file, 'w') as f:
+                json.dump(recordings, f, indent=2)
+
+            logger.info(f"Recording {filename} false_positive: {not current_fp}")
+
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                "status": "ok",
+                "filename": filename,
+                "is_false_positive": not current_fp
+            }).encode())
+
+        except Exception as e:
+            logger.error(f"Error toggling false positive: {e}")
+            self.send_error(500, str(e))
+
+    def handle_api_llm_status(self):
+        """Get LLM configuration status: GET /api/llm/status"""
+        try:
+            llm_enabled = os.environ.get('LLM_ENABLED', 'false').lower() == 'true'
+            llm_api_url = os.environ.get('LLM_API_URL', '')
+            llm_auto_analyze = os.environ.get('LLM_AUTO_ANALYZE', 'false').lower() == 'true'
+
+            status = {
+                "enabled": llm_enabled,
+                "auto_analyze": llm_auto_analyze,
+                "api_url": llm_api_url if llm_enabled else None,
+                "model": os.environ.get('LLM_MODEL', 'llava') if llm_enabled else None,
+                "configured": llm_enabled and bool(llm_api_url)
+            }
+
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps(status, indent=2).encode())
+
+        except Exception as e:
+            logger.error(f"Error getting LLM status: {e}")
             self.send_error(500, str(e))
 
     def handle_api_health(self):

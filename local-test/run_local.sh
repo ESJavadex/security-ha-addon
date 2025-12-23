@@ -16,6 +16,12 @@ ROI_X_START="${ROI_X_START:-33}"
 ROI_X_END="${ROI_X_END:-66}"
 ROI_Y_START="${ROI_Y_START:-5}"
 ROI_Y_END="${ROI_Y_END:-95}"
+LLM_ENABLED="${LLM_ENABLED:-false}"
+LLM_AUTO_ANALYZE="${LLM_AUTO_ANALYZE:-false}"
+LLM_API_URL="${LLM_API_URL:-}"
+LLM_API_KEY="${LLM_API_KEY:-}"
+LLM_MODEL="${LLM_MODEL:-llava}"
+LLM_TIMEOUT="${LLM_TIMEOUT:-60}"
 
 # Export for Python scripts
 export STREAM_URL
@@ -30,6 +36,12 @@ export ROI_X_START
 export ROI_X_END
 export ROI_Y_START
 export ROI_Y_END
+export LLM_ENABLED
+export LLM_AUTO_ANALYZE
+export LLM_API_URL
+export LLM_API_KEY
+export LLM_MODEL
+export LLM_TIMEOUT
 export STATE_FILE="/share/security_state.json"
 export SETTINGS_FILE="/share/security_settings.json"
 export HTTP_PORT=8081
@@ -49,6 +61,12 @@ echo "Post-roll: ${RECORDING_POST_ROLL}s"
 echo "Recordings path: $RECORDINGS_PATH"
 echo "Max recordings: $MAX_RECORDINGS"
 echo "Log level: $LOG_LEVEL"
+echo "LLM enabled: $LLM_ENABLED"
+if [ "$LLM_ENABLED" = "true" ]; then
+    echo "LLM auto-analyze: $LLM_AUTO_ANALYZE"
+    echo "LLM API URL: $LLM_API_URL"
+    echo "LLM model: $LLM_MODEL"
+fi
 echo ""
 echo "Live settings: curl -X POST localhost:8081/api/settings/roi/33/66"
 echo "========================================"
@@ -90,6 +108,7 @@ sys.path.insert(0, '/app')
 from motion_detector import MotionDetector, MotionEvent
 from recording_manager import RecordingManager
 from ha_integration import HAIntegration
+from llm_analyzer import LLMAnalyzer
 
 # Get configuration from environment
 stream_url = os.environ['STREAM_URL']
@@ -106,6 +125,29 @@ roi_x_end = int(os.environ.get('ROI_X_END', 66))
 roi_y_start = int(os.environ.get('ROI_Y_START', 5))
 roi_y_end = int(os.environ.get('ROI_Y_END', 95))
 
+# LLM configuration
+llm_enabled = os.environ.get('LLM_ENABLED', 'false').lower() == 'true'
+llm_auto_analyze = os.environ.get('LLM_AUTO_ANALYZE', 'false').lower() == 'true'
+llm_api_url = os.environ.get('LLM_API_URL', '')
+llm_api_key = os.environ.get('LLM_API_KEY', '')
+llm_model = os.environ.get('LLM_MODEL', 'llava')
+llm_timeout = int(os.environ.get('LLM_TIMEOUT', 60))
+
+# Initialize LLM analyzer if enabled
+llm_analyzer = None
+if llm_enabled and llm_api_url:
+    llm_analyzer = LLMAnalyzer(
+        api_url=llm_api_url,
+        model_name=llm_model,
+        api_key=llm_api_key if llm_api_key else None,
+        enabled=True,
+        auto_analyze=llm_auto_analyze,
+        timeout=llm_timeout
+    )
+    logging.info(f'LLM analyzer initialized: {llm_api_url}, model={llm_model}, auto={llm_auto_analyze}')
+else:
+    logging.info('LLM analyzer disabled')
+
 # Initialize components
 ha = HAIntegration(state_file=state_file, update_interval=1.0)
 recorder = RecordingManager(
@@ -113,7 +155,9 @@ recorder = RecordingManager(
     recordings_path=recordings_path,
     pre_roll=pre_roll,
     post_roll=post_roll,
-    max_recordings=max_recordings
+    max_recordings=max_recordings,
+    llm_analyzer=llm_analyzer,
+    llm_auto_analyze=llm_auto_analyze
 )
 
 # Motion callbacks

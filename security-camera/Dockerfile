@@ -21,7 +21,8 @@ ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 # Install Python packages
 RUN pip install --no-cache-dir \
     requests \
-    watchdog
+    watchdog \
+    Pillow
 
 # Create directories
 RUN mkdir -p /app /share/security_recordings
@@ -31,6 +32,7 @@ COPY motion_detector.py /app/
 COPY recording_manager.py /app/
 COPY ha_integration.py /app/
 COPY http_server.py /app/
+COPY llm_analyzer.py /app/
 COPY run.sh /app/
 
 # Fix line endings and permissions

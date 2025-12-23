@@ -27,6 +27,7 @@ cp ../security-camera/motion_detector.py .
 cp ../security-camera/recording_manager.py .
 cp ../security-camera/ha_integration.py .
 cp ../security-camera/http_server.py .
+cp ../security-camera/llm_analyzer.py .
 
 # Build and start container
 echo "Building Docker image..."
