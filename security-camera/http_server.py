@@ -1266,8 +1266,8 @@ class SecurityHTTPHandler(SimpleHTTPRequestHandler):
         elif self.path.startswith('/api/'):
             self.send_error(404, "API endpoint not found")
         else:
-            # Serve static files (recordings, thumbnails)
-            super().do_GET()
+            # Serve static files (recordings, thumbnails) from recordings directory
+            self.serve_recording_file()
 
     def handle_index(self):
         """Serve the recordings viewer UI."""
@@ -1281,6 +1281,48 @@ class SecurityHTTPHandler(SimpleHTTPRequestHandler):
         self.send_header('Content-Type', 'text/html; charset=utf-8')
         self.end_headers()
         self.wfile.write(html.encode('utf-8'))
+
+    def serve_recording_file(self):
+        """Serve recording files (mp4, jpg) from the recordings directory."""
+        # Get just the filename from the path
+        filename = os.path.basename(urlparse(self.path).path)
+
+        # Security check - only allow mp4 and jpg files
+        if not (filename.endswith('.mp4') or filename.endswith('.jpg')):
+            self.send_error(404, "File not found")
+            return
+
+        # Build full path to file in recordings directory
+        file_path = Path(self.recordings_path) / filename
+
+        if not file_path.exists():
+            self.send_error(404, "File not found")
+            return
+
+        try:
+            # Determine content type
+            if filename.endswith('.mp4'):
+                content_type = 'video/mp4'
+            else:
+                content_type = 'image/jpeg'
+
+            # Get file size
+            file_size = file_path.stat().st_size
+
+            # Send response
+            self.send_response(200)
+            self.send_header('Content-Type', content_type)
+            self.send_header('Content-Length', str(file_size))
+            self.send_header('Accept-Ranges', 'bytes')
+            self.end_headers()
+
+            # Stream file content
+            with open(file_path, 'rb') as f:
+                self.wfile.write(f.read())
+
+        except Exception as e:
+            logger.error(f"Error serving file {filename}: {e}")
+            self.send_error(500, str(e))
 
     def do_POST(self):
         """Handle POST requests."""
