@@ -657,7 +657,9 @@ INDEX_HTML_TEMPLATE = '''<!DOCTYPE html>
 
         async function loadRecordings() {
             try {
-                const res = await fetch(basePath + '/api/recordings');
+                const res = await fetch(basePath + '/api/recordings', {
+                    credentials: 'same-origin'
+                });
                 recordings = await res.json();
                 applyFilters();
             } catch (e) {
@@ -667,7 +669,9 @@ INDEX_HTML_TEMPLATE = '''<!DOCTYPE html>
 
         async function loadState() {
             try {
-                const res = await fetch(basePath + '/api/state');
+                const res = await fetch(basePath + '/api/state', {
+                    credentials: 'same-origin'
+                });
                 const state = await res.json();
                 const dot = document.getElementById('statusDot');
                 const text = document.getElementById('statusText');
@@ -688,12 +692,18 @@ INDEX_HTML_TEMPLATE = '''<!DOCTYPE html>
 
         async function loadLLMStatus() {
             try {
-                const res = await fetch(basePath + '/api/llm/status');
+                const res = await fetch(basePath + '/api/llm/status', {
+                    credentials: 'same-origin'
+                });
                 const status = await res.json();
+                console.log('LLM status:', status);
                 llmConfigured = status.configured;
                 // Hide analysis filter if LLM not configured
                 if (!llmConfigured) {
                     document.getElementById('filterAnalysis').style.display = 'none';
+                    console.log('LLM not configured - analyze buttons will be hidden');
+                } else {
+                    console.log('LLM configured - analyze features enabled');
                 }
             } catch (e) {
                 console.error('Failed to load LLM status:', e);
@@ -939,15 +949,22 @@ INDEX_HTML_TEMPLATE = '''<!DOCTYPE html>
             btn.textContent = '...';
 
             try {
-                const res = await fetch(basePath + `/api/recordings/${filename}/analyze`, { method: 'POST' });
+                console.log('Analyzing recording:', filename);
+                const res = await fetch(basePath + `/api/recordings/${filename}/analyze`, {
+                    method: 'POST',
+                    credentials: 'same-origin'
+                });
+                console.log('Analyze response status:', res.status);
                 if (res.ok) {
                     const data = await res.json();
+                    console.log('Analysis result:', data);
                     // Update local data
                     const rec = recordings.find(r => r.filename === filename);
                     if (rec) rec.llm_analysis = data.analysis;
                     applyFilters();
                 } else {
                     const err = await res.text();
+                    console.error('Analysis failed:', err);
                     alert('Analysis failed: ' + err);
                 }
             } catch (e) {
@@ -962,7 +979,10 @@ INDEX_HTML_TEMPLATE = '''<!DOCTYPE html>
         async function toggleFavorite(filename, event) {
             if (event) event.stopPropagation();
             try {
-                const res = await fetch(basePath + `/api/recordings/${filename}/favorite`, { method: 'POST' });
+                const res = await fetch(basePath + `/api/recordings/${filename}/favorite`, {
+                    method: 'POST',
+                    credentials: 'same-origin'
+                });
                 if (res.ok) {
                     const data = await res.json();
                     // Update local data
@@ -1014,7 +1034,10 @@ INDEX_HTML_TEMPLATE = '''<!DOCTYPE html>
             try {
                 // Use POST /api/recordings/{filename}/delete for ingress compatibility
                 // (Home Assistant ingress converts DELETE to POST)
-                const res = await fetch(basePath + `/api/recordings/${deleteFilename}/delete`, { method: 'POST' });
+                const res = await fetch(basePath + `/api/recordings/${deleteFilename}/delete`, {
+                    method: 'POST',
+                    credentials: 'same-origin'
+                });
                 if (res.ok) {
                     cancelDelete();
                     closeModal();
@@ -1129,20 +1152,36 @@ INDEX_HTML_TEMPLATE = '''<!DOCTYPE html>
             analyzeBtn.textContent = `Analyzing... (0/${filenames.length})`;
             analyzeBtn.disabled = true;
 
+            console.log('Starting bulk analysis of', filenames.length, 'recordings');
             let completed = 0;
+            let errors = 0;
             for (const filename of filenames) {
                 try {
-                    const res = await fetch(basePath + `/api/recordings/${filename}/analyze`, { method: 'POST' });
+                    console.log('Analyzing:', filename);
+                    const res = await fetch(basePath + `/api/recordings/${filename}/analyze`, {
+                        method: 'POST',
+                        credentials: 'same-origin'
+                    });
                     if (res.ok) {
                         const data = await res.json();
                         const rec = recordings.find(r => r.filename === filename);
                         if (rec) rec.llm_analysis = data.analysis;
+                        console.log('Analysis complete for', filename, ':', data.analysis?.is_false_positive ? 'FP' : 'Real');
+                    } else {
+                        console.error('Analysis failed for', filename, ':', await res.text());
+                        errors++;
                     }
                 } catch (e) {
                     console.error(`Failed to analyze ${filename}:`, e);
+                    errors++;
                 }
                 completed++;
                 analyzeBtn.textContent = `Analyzing... (${completed}/${filenames.length})`;
+            }
+
+            console.log('Bulk analysis complete:', completed - errors, 'success,', errors, 'errors');
+            if (errors > 0) {
+                alert(`Analysis complete. ${completed - errors}/${filenames.length} succeeded.`);
             }
 
             analyzingBulk = false;
@@ -1177,9 +1216,11 @@ INDEX_HTML_TEMPLATE = '''<!DOCTYPE html>
             console.log('Bulk delete URL:', basePath + '/api/recordings/bulk-delete');
 
             try {
+                // Try bulk delete first
                 const res = await fetch(basePath + '/api/recordings/bulk-delete', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
+                    credentials: 'same-origin',
                     body: JSON.stringify(payload)
                 });
                 console.log('Bulk delete response status:', res.status);
@@ -1192,10 +1233,41 @@ INDEX_HTML_TEMPLATE = '''<!DOCTYPE html>
                     await loadRecordings();
                     updateSelectionCount();
                 } else {
-                    const err = await res.text();
-                    alert(`Failed to delete: ${err}`);
+                    // Fallback to sequential single deletes if bulk fails
+                    console.log('Bulk delete failed, falling back to sequential deletes');
+                    const errText = await res.text();
+                    console.log('Bulk delete error:', errText);
+
+                    let deleted = 0;
+                    let errors = [];
+                    for (const filename of bulkDeleteFiles) {
+                        try {
+                            const singleRes = await fetch(basePath + `/api/recordings/${filename}/delete`, {
+                                method: 'POST',
+                                credentials: 'same-origin'
+                            });
+                            if (singleRes.ok) {
+                                deleted++;
+                            } else {
+                                errors.push(filename);
+                            }
+                        } catch (e) {
+                            errors.push(filename);
+                        }
+                    }
+
+                    if (errors.length > 0) {
+                        alert(`Deleted ${deleted}/${bulkDeleteFiles.length}. Failed: ${errors.join(', ')}`);
+                    }
+
+                    selectedFiles.clear();
+                    bulkDeleteFiles = [];
+                    cancelDelete();
+                    await loadRecordings();
+                    updateSelectionCount();
                 }
             } catch (e) {
+                console.error('Bulk delete error:', e);
                 alert(`Error: ${e.message}`);
             }
         }
@@ -1529,18 +1601,44 @@ class SecurityHTTPHandler(SimpleHTTPRequestHandler):
     def handle_api_bulk_delete(self):
         """Bulk delete recordings: POST /api/recordings/bulk-delete with JSON body {"filenames": [...]}"""
         try:
+            # Try multiple ways to get body - HA ingress may not forward Content-Length properly
             content_length = int(self.headers.get('Content-Length', 0))
-            logger.debug(f"Bulk delete - Content-Length: {content_length}")
+            logger.info(f"Bulk delete - Content-Length header: {content_length}")
+            logger.info(f"Bulk delete - Content-Type: {self.headers.get('Content-Type', 'not set')}")
 
-            if content_length == 0:
-                self.send_error(400, "Request body is empty")
-                return
+            body = ""
+            if content_length > 0:
+                body = self.rfile.read(content_length).decode('utf-8')
+            else:
+                # HA ingress may use chunked transfer encoding without Content-Length
+                # Try reading with a reasonable buffer
+                try:
+                    # Set socket to non-blocking temporarily for reading
+                    import select
+                    if hasattr(self.rfile, 'fileno'):
+                        readable, _, _ = select.select([self.rfile], [], [], 0.5)
+                        if readable:
+                            # Read available data in chunks
+                            chunks = []
+                            while True:
+                                chunk = self.rfile.read(4096)
+                                if not chunk:
+                                    break
+                                chunks.append(chunk)
+                                # Check if more data available
+                                readable, _, _ = select.select([self.rfile], [], [], 0.1)
+                                if not readable:
+                                    break
+                            body = b''.join(chunks).decode('utf-8')
+                except Exception as e:
+                    logger.warning(f"Error reading body without Content-Length: {e}")
 
-            body = self.rfile.read(content_length).decode('utf-8')
-            logger.debug(f"Bulk delete - Body: {body[:200] if body else 'EMPTY'}")
+            logger.info(f"Bulk delete - Body received: {len(body)} chars")
+            if body:
+                logger.debug(f"Bulk delete - Body content: {body[:200]}")
 
             if not body.strip():
-                self.send_error(400, "Request body is empty")
+                self.send_error(400, "Request body is empty. Content-Length was: " + str(content_length))
                 return
 
             try:
@@ -1719,6 +1817,8 @@ class SecurityHTTPHandler(SimpleHTTPRequestHandler):
                 return
 
             filename = parts[3]
+            logger.info(f"Analyze request for: {filename}")
+
             if not filename.endswith('.mp4'):
                 self.send_error(400, "Invalid filename")
                 return
@@ -1727,8 +1827,14 @@ class SecurityHTTPHandler(SimpleHTTPRequestHandler):
             llm_enabled = os.environ.get('LLM_ENABLED', 'false').lower() == 'true'
             llm_api_url = os.environ.get('LLM_API_URL', '')
 
-            if not llm_enabled or not llm_api_url:
-                self.send_error(400, "LLM analysis is not configured")
+            logger.info(f"LLM config - enabled: {llm_enabled}, api_url: {llm_api_url[:50] if llm_api_url else 'not set'}...")
+
+            if not llm_enabled:
+                self.send_error(400, "LLM analysis is disabled. Set llm_enabled: true in add-on config.")
+                return
+
+            if not llm_api_url:
+                self.send_error(400, "LLM API URL not configured. Set llm_api_url in add-on config.")
                 return
 
             # Load metadata to get screenshots
@@ -1756,17 +1862,30 @@ class SecurityHTTPHandler(SimpleHTTPRequestHandler):
                 self.send_error(400, "No screenshots available for analysis")
                 return
 
-            # Import and run analysis
-            from llm_analyzer import LLMAnalyzer
+            logger.info(f"Starting LLM analysis with {len(screenshots)} screenshots")
 
-            analyzer = LLMAnalyzer(
-                api_url=llm_api_url,
-                model_name=os.environ.get('LLM_MODEL', 'llava'),
-                api_key=os.environ.get('LLM_API_KEY') or None,
-                timeout=int(os.environ.get('LLM_TIMEOUT', 60))
-            )
+            # Import and run analysis
+            try:
+                from llm_analyzer import LLMAnalyzer
+            except ImportError as e:
+                logger.error(f"Failed to import LLM analyzer: {e}")
+                self.send_error(500, f"LLM analyzer module not available: {e}")
+                return
+
+            try:
+                analyzer = LLMAnalyzer(
+                    api_url=llm_api_url,
+                    model_name=os.environ.get('LLM_MODEL', 'llava'),
+                    api_key=os.environ.get('LLM_API_KEY') or None,
+                    timeout=int(os.environ.get('LLM_TIMEOUT', 60))
+                )
+            except Exception as e:
+                logger.error(f"Failed to initialize LLM analyzer: {e}")
+                self.send_error(500, f"Failed to initialize LLM analyzer: {e}")
+                return
 
             # Run analysis (this may take a while)
+            logger.info(f"Calling LLM API at {llm_api_url}")
             result = analyzer.analyze_recording(
                 filename, screenshots, Path(self.recordings_path),
                 save_composite=save_composite
