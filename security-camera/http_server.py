@@ -1378,12 +1378,29 @@ class SecurityHTTPHandler(SimpleHTTPRequestHandler):
             self.send_error(500, str(e))
 
     def handle_api_recordings(self):
-        """Return list of recordings."""
+        """Return list of recordings, cleaning up orphaned entries."""
         try:
             metadata_file = Path(self.recordings_path) / "recordings.json"
             if metadata_file.exists():
                 with open(metadata_file, 'r') as f:
-                    recordings = json.load(f)
+                    all_recordings = json.load(f)
+
+                # Filter out recordings where video file no longer exists
+                recordings = []
+                orphaned = 0
+                for r in all_recordings:
+                    video_path = Path(self.recordings_path) / r.get('filename', '')
+                    if video_path.exists():
+                        recordings.append(r)
+                    else:
+                        orphaned += 1
+                        logger.debug(f"Removing orphaned metadata: {r.get('filename')}")
+
+                # Save cleaned metadata if we removed orphans
+                if orphaned > 0:
+                    logger.info(f"Cleaned up {orphaned} orphaned recording entries")
+                    with open(metadata_file, 'w') as f:
+                        json.dump(recordings, f, indent=2)
             else:
                 recordings = []
 
