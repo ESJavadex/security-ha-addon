@@ -98,12 +98,31 @@ class RecordingManager:
         self._recordings: List[Recording] = self._load_metadata()
 
     def _load_metadata(self) -> List[Recording]:
-        """Load recording metadata from JSON file."""
+        """Load recording metadata from JSON file, removing orphaned entries."""
         if self.metadata_file.exists():
             try:
                 with open(self.metadata_file, 'r') as f:
                     data = json.load(f)
-                    return [Recording(**r) for r in data]
+
+                recordings = []
+                orphaned = 0
+                for r in data:
+                    rec = Recording(**r)
+                    # Check if the video file still exists
+                    video_path = Path(rec.filepath)
+                    if video_path.exists():
+                        recordings.append(rec)
+                    else:
+                        orphaned += 1
+                        logger.debug(f"Removing orphaned metadata: {rec.filename}")
+
+                # Save cleaned metadata if we removed orphans
+                if orphaned > 0:
+                    logger.info(f"Cleaned up {orphaned} orphaned recording entries")
+                    self._recordings = recordings
+                    self._save_metadata()
+
+                return recordings
             except Exception as e:
                 logger.error(f"Error loading metadata: {e}")
         return []
