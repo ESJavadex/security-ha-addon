@@ -36,6 +36,7 @@ options:
   recording_pre_roll: 6
   recording_post_roll: 5
   motion_cooldown: 10
+  light_change_threshold: 0
   recordings_path: "/share/security_recordings"
   max_recordings: 0
   log_level: "info"
@@ -56,6 +57,7 @@ schema:
   recording_pre_roll: int(0,60)
   recording_post_roll: int(0,60)
   motion_cooldown: int(2,120)
+  light_change_threshold: int(0,100)?
   recordings_path: str
   max_recordings: int(0,10000)
   log_level: list(debug|info|warning|error)
