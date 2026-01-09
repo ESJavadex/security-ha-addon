@@ -51,6 +51,8 @@ class MotionDetector:
         min_duration: float = 3.0,
         check_interval: float = 1.0,
         motion_cooldown: float = 10.0,
+        light_change_threshold: float = 0.0,  # Disabled by default - set >0 to enable
+        light_change_cooldown: int = 3,
         roi_x_start: int = 0,
         roi_x_end: int = 100,
         roi_y_start: int = 0,
@@ -69,6 +71,8 @@ class MotionDetector:
             min_duration: Seconds motion must persist before triggering
             check_interval: Seconds between frame checks
             motion_cooldown: Seconds without motion before ending detection
+            light_change_threshold: Percentage brightness change to detect light switch (0=disabled)
+            light_change_cooldown: Frames to skip after detecting a light change
             roi_x_start: Left boundary of detection zone (0-100 percentage)
             roi_x_end: Right boundary of detection zone (0-100 percentage)
             roi_y_start: Top boundary of detection zone (0-100 percentage)
@@ -83,6 +87,8 @@ class MotionDetector:
         self.min_duration = min_duration
         self.check_interval = check_interval
         self.motion_cooldown = motion_cooldown
+        self.light_change_threshold = light_change_threshold  # 0 = disabled
+        self.light_change_cooldown_frames = light_change_cooldown
         self.roi_x_start = max(0, min(100, roi_x_start))
         self.roi_x_end = max(0, min(100, roi_x_end))
         self.roi_y_start = max(0, min(100, roi_y_start))
@@ -105,6 +111,10 @@ class MotionDetector:
         self.state = MotionState.IDLE
         self.motion_start_time: Optional[float] = None
         self.last_motion_time: Optional[float] = None
+
+        # Light change detection (for logging/debugging only)
+        self._last_brightness: Optional[float] = None
+        self._light_changes_detected: int = 0
 
         # Thread control
         self._running = False
@@ -182,14 +192,44 @@ class MotionDetector:
             logger.error(f"OpenCV frame extraction error: {e}")
             return None
 
+    def _calculate_brightness(self, frame: np.ndarray) -> float:
+        """Calculate average brightness of a frame (0-255)."""
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        return float(np.mean(gray))
+
+    def _is_light_change(self, current_brightness: float) -> bool:
+        """
+        Check if a sudden light change occurred.
+
+        Returns True only for very obvious light switches (on/off).
+        Conservative to avoid missing real motion.
+        """
+        if self.light_change_threshold <= 0:
+            return False  # Disabled
+
+        if self._last_brightness is None:
+            return False
+
+        # Calculate percentage change
+        brightness_diff = abs(current_brightness - self._last_brightness)
+        brightness_pct_change = (brightness_diff / max(self._last_brightness, 1)) * 100
+
+        # Only trigger on very significant changes (default 15%)
+        if brightness_pct_change > self.light_change_threshold:
+            logger.info(f"Light change detected: {brightness_pct_change:.1f}% change "
+                       f"(threshold: {self.light_change_threshold}%)")
+            self._light_changes_detected += 1
+            return True
+
+        return False
+
     def _detect_motion(self, frame: np.ndarray) -> int:
         """
         Detect motion in frame using background subtraction.
-        Only analyzes the middle third of the frame vertically to reduce
-        false positives from lighting changes on the sides.
+        Includes light change filtering to reduce false positives.
 
         Returns:
-            Total area of motion contours (0 if no motion)
+            Total area of motion contours (0 if no motion, -1 if light change detected)
         """
         # Crop to region of interest (ROI) - configurable detection zone
         height, width = frame.shape[:2]
@@ -200,6 +240,19 @@ class MotionDetector:
         roi_frame = frame[top_bound:bottom_bound, left_bound:right_bound]
 
         logger.debug(f"ROI: x={left_bound}-{right_bound}, y={top_bound}-{bottom_bound}")
+
+        # Calculate brightness for light change detection
+        current_brightness = self._calculate_brightness(roi_frame)
+
+        # Check for light change (logging only - we never block because
+        # lights often turn on when a person triggers a motion sensor!)
+        is_light_change = self._is_light_change(current_brightness)
+        self._last_brightness = current_brightness
+
+        # Note: We intentionally do NOT skip frames on light change because:
+        # 1. Motion-activated lights turn on when a person arrives
+        # 2. Filtering would miss the person who triggered the light
+        # Light change detection is for logging/debugging only
 
         # Resize for faster processing (optional, reduces CPU load)
         scale = 0.5
@@ -426,6 +479,8 @@ class MotionDetector:
         return {
             "frames_processed": self.frames_processed,
             "motion_events": self.motion_events,
+            "light_changes_detected": self._light_changes_detected,
+            "current_brightness": self._last_brightness,
             "state": self.state.value,
             "is_motion_active": self.is_motion_active,
             "roi_x_start": self.roi_x_start,
