@@ -24,6 +24,7 @@ if [ -f "$CONFIG_FILE" ]; then
     MOTION_MIN_DURATION=$(jq -r '.motion_min_duration // empty' "$CONFIG_FILE")
     RECORDING_PRE_ROLL=$(jq -r '.recording_pre_roll // empty' "$CONFIG_FILE")
     RECORDING_POST_ROLL=$(jq -r '.recording_post_roll // empty' "$CONFIG_FILE")
+    MOTION_COOLDOWN=$(jq -r '.motion_cooldown // empty' "$CONFIG_FILE")
     RECORDINGS_PATH=$(jq -r '.recordings_path // empty' "$CONFIG_FILE")
     MAX_RECORDINGS=$(jq -r '.max_recordings // empty' "$CONFIG_FILE")
     LOG_LEVEL=$(jq -r '.log_level // empty' "$CONFIG_FILE")
@@ -50,6 +51,7 @@ MOTION_THRESHOLD="${MOTION_THRESHOLD:-5000}"
 MOTION_MIN_DURATION="${MOTION_MIN_DURATION:-3}"
 RECORDING_PRE_ROLL="${RECORDING_PRE_ROLL:-6}"
 RECORDING_POST_ROLL="${RECORDING_POST_ROLL:-5}"
+MOTION_COOLDOWN="${MOTION_COOLDOWN:-10}"
 RECORDINGS_PATH="${RECORDINGS_PATH:-/share/security_recordings}"
 MAX_RECORDINGS="${MAX_RECORDINGS:-50}"
 LOG_LEVEL="${LOG_LEVEL:-info}"
@@ -70,6 +72,7 @@ export MOTION_THRESHOLD
 export MOTION_MIN_DURATION
 export RECORDING_PRE_ROLL
 export RECORDING_POST_ROLL
+export MOTION_COOLDOWN
 export RECORDINGS_PATH
 export MAX_RECORDINGS
 export LOG_LEVEL
@@ -99,6 +102,7 @@ echo "Min duration: ${MOTION_MIN_DURATION}s"
 echo "ROI: ${ROI_X_START}% - ${ROI_X_END}%"
 echo "Pre-roll: ${RECORDING_PRE_ROLL}s"
 echo "Post-roll: ${RECORDING_POST_ROLL}s"
+echo "Motion cooldown: ${MOTION_COOLDOWN}s"
 echo "Recordings path: $RECORDINGS_PATH"
 echo "Max recordings: $MAX_RECORDINGS"
 echo "Log level: $LOG_LEVEL"
@@ -160,6 +164,7 @@ motion_threshold = int(os.environ['MOTION_THRESHOLD'])
 min_duration = float(os.environ['MOTION_MIN_DURATION'])
 pre_roll = int(os.environ['RECORDING_PRE_ROLL'])
 post_roll = int(os.environ['RECORDING_POST_ROLL'])
+motion_cooldown = float(os.environ.get('MOTION_COOLDOWN', 10))
 recordings_path = os.environ['RECORDINGS_PATH']
 max_recordings = int(os.environ['MAX_RECORDINGS'])
 state_file = os.environ['STATE_FILE']
@@ -226,6 +231,7 @@ detector = MotionDetector(
     motion_threshold=motion_threshold,
     min_duration=min_duration,
     check_interval=1.0,
+    motion_cooldown=motion_cooldown,
     roi_x_start=roi_x_start,
     roi_x_end=roi_x_end,
     roi_y_start=roi_y_start,

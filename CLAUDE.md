@@ -69,6 +69,7 @@ Environment variables (local) or config.yaml options (HA):
 | ROI_Y_END | 95 | Detection zone bottom edge (0-100%) |
 | RECORDING_PRE_ROLL | 6 | Seconds before motion |
 | RECORDING_POST_ROLL | 5 | Seconds after motion ends |
+| MOTION_COOLDOWN | 10 | Seconds without motion before ending detection |
 | MAX_RECORDINGS | 50 | Auto-cleanup threshold |
 | LOG_LEVEL | info (HA) / debug (local) | debug/info/warning/error |
 
