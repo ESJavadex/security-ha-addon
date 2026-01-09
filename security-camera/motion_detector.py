@@ -50,6 +50,7 @@ class MotionDetector:
         motion_threshold: int = 5000,
         min_duration: float = 3.0,
         check_interval: float = 1.0,
+        motion_cooldown: float = 10.0,
         roi_x_start: int = 0,
         roi_x_end: int = 100,
         roi_y_start: int = 0,
@@ -67,6 +68,7 @@ class MotionDetector:
             motion_threshold: Minimum contour area to consider as motion
             min_duration: Seconds motion must persist before triggering
             check_interval: Seconds between frame checks
+            motion_cooldown: Seconds without motion before ending detection
             roi_x_start: Left boundary of detection zone (0-100 percentage)
             roi_x_end: Right boundary of detection zone (0-100 percentage)
             roi_y_start: Top boundary of detection zone (0-100 percentage)
@@ -80,6 +82,7 @@ class MotionDetector:
         self.motion_threshold = motion_threshold
         self.min_duration = min_duration
         self.check_interval = check_interval
+        self.motion_cooldown = motion_cooldown
         self.roi_x_start = max(0, min(100, roi_x_start))
         self.roi_x_end = max(0, min(100, roi_x_end))
         self.roi_y_start = max(0, min(100, roi_y_start))
@@ -102,7 +105,6 @@ class MotionDetector:
         self.state = MotionState.IDLE
         self.motion_start_time: Optional[float] = None
         self.last_motion_time: Optional[float] = None
-        self.motion_cooldown = 2.0  # Seconds without motion before ending
 
         # Thread control
         self._running = False
