@@ -25,6 +25,7 @@ if [ -f "$CONFIG_FILE" ]; then
     RECORDING_PRE_ROLL=$(jq -r '.recording_pre_roll // empty' "$CONFIG_FILE")
     RECORDING_POST_ROLL=$(jq -r '.recording_post_roll // empty' "$CONFIG_FILE")
     MOTION_COOLDOWN=$(jq -r '.motion_cooldown // empty' "$CONFIG_FILE")
+    LIGHT_CHANGE_THRESHOLD=$(jq -r '.light_change_threshold // empty' "$CONFIG_FILE")
     RECORDINGS_PATH=$(jq -r '.recordings_path // empty' "$CONFIG_FILE")
     MAX_RECORDINGS=$(jq -r '.max_recordings // empty' "$CONFIG_FILE")
     LOG_LEVEL=$(jq -r '.log_level // empty' "$CONFIG_FILE")
@@ -52,6 +53,7 @@ MOTION_MIN_DURATION="${MOTION_MIN_DURATION:-3}"
 RECORDING_PRE_ROLL="${RECORDING_PRE_ROLL:-6}"
 RECORDING_POST_ROLL="${RECORDING_POST_ROLL:-5}"
 MOTION_COOLDOWN="${MOTION_COOLDOWN:-10}"
+LIGHT_CHANGE_THRESHOLD="${LIGHT_CHANGE_THRESHOLD:-0}"
 RECORDINGS_PATH="${RECORDINGS_PATH:-/share/security_recordings}"
 MAX_RECORDINGS="${MAX_RECORDINGS:-50}"
 LOG_LEVEL="${LOG_LEVEL:-info}"
@@ -73,6 +75,7 @@ export MOTION_MIN_DURATION
 export RECORDING_PRE_ROLL
 export RECORDING_POST_ROLL
 export MOTION_COOLDOWN
+export LIGHT_CHANGE_THRESHOLD
 export RECORDINGS_PATH
 export MAX_RECORDINGS
 export LOG_LEVEL
@@ -165,6 +168,7 @@ min_duration = float(os.environ['MOTION_MIN_DURATION'])
 pre_roll = int(os.environ['RECORDING_PRE_ROLL'])
 post_roll = int(os.environ['RECORDING_POST_ROLL'])
 motion_cooldown = float(os.environ.get('MOTION_COOLDOWN', 10))
+light_change_threshold = float(os.environ.get('LIGHT_CHANGE_THRESHOLD', 0))
 recordings_path = os.environ['RECORDINGS_PATH']
 max_recordings = int(os.environ['MAX_RECORDINGS'])
 state_file = os.environ['STATE_FILE']
@@ -232,6 +236,7 @@ detector = MotionDetector(
     min_duration=min_duration,
     check_interval=1.0,
     motion_cooldown=motion_cooldown,
+    light_change_threshold=light_change_threshold,
     roi_x_start=roi_x_start,
     roi_x_end=roi_x_end,
     roi_y_start=roi_y_start,
