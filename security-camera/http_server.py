@@ -77,7 +77,7 @@ INDEX_HTML_TEMPLATE = '''<!DOCTYPE html>
         .container { padding: 1.5rem; }
         .grid {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
             gap: 1.5rem;
         }
         .card {
@@ -540,6 +540,75 @@ INDEX_HTML_TEMPLATE = '''<!DOCTYPE html>
         }
         .card.selectable { cursor: pointer; }
         .card.selectable .card-info { pointer-events: none; }
+        /* 4-frame composite grid view */
+        .frame-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            grid-template-rows: 1fr 1fr;
+            gap: 2px;
+            width: 100%;
+            height: 100%;
+            background: #0a0a1a;
+        }
+        .frame-grid img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        .card-thumb.has-grid {
+            aspect-ratio: 16/9;
+        }
+        .card-thumb.has-grid .main-thumb {
+            display: none;
+        }
+        .card-thumb.has-grid .screenshot-preview {
+            display: none;
+        }
+        .card-thumb.has-grid .screenshot-progress {
+            display: none;
+        }
+        .frame-grid .frame-cell {
+            position: relative;
+            overflow: hidden;
+            background: #1a1a2e;
+        }
+        .frame-grid .frame-cell img {
+            transition: transform 0.2s;
+        }
+        .frame-grid .frame-cell:hover img {
+            transform: scale(1.05);
+        }
+        .frame-grid .frame-index {
+            position: absolute;
+            bottom: 2px;
+            left: 2px;
+            background: rgba(0,0,0,0.7);
+            color: #aaa;
+            font-size: 0.65rem;
+            padding: 1px 4px;
+            border-radius: 2px;
+        }
+        /* Single frame fallback */
+        .card-thumb.single-frame .frame-grid {
+            grid-template-columns: 1fr;
+            grid-template-rows: 1fr;
+        }
+        /* Night filter button style */
+        .btn-night-filter {
+            background: transparent;
+            border: 1px solid #6366f1;
+            color: #6366f1;
+            padding: 0.4rem 0.8rem;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.85rem;
+            transition: all 0.2s;
+        }
+        .btn-night-filter:hover { background: rgba(99, 102, 241, 0.1); }
+        .btn-night-filter.active {
+            background: #6366f1;
+            color: #fff;
+        }
     </style>
 </head>
 <body>
@@ -565,6 +634,14 @@ INDEX_HTML_TEMPLATE = '''<!DOCTYPE html>
                 <option value="real">Real activity</option>
                 <option value="fp">False positives</option>
                 <option value="unanalyzed">Not analyzed</option>
+            </select>
+            <select id="filterTime">
+                <option value="all">All hours</option>
+                <option value="night">🌙 Night (22:00-07:00)</option>
+                <option value="day">☀️ Day (07:00-22:00)</option>
+                <option value="morning">🌅 Morning (06:00-12:00)</option>
+                <option value="afternoon">🌤️ Afternoon (12:00-18:00)</option>
+                <option value="evening">🌆 Evening (18:00-24:00)</option>
             </select>
             <input type="date" id="filterDate">
             <select id="filterSort">
@@ -711,11 +788,37 @@ INDEX_HTML_TEMPLATE = '''<!DOCTYPE html>
             }
         }
 
+        function getHour(ts) {
+            const d = new Date(ts * 1000);
+            return d.getHours();
+        }
+
+        function isNightTime(hour) {
+            return hour >= 22 || hour < 7;
+        }
+
+        function isDayTime(hour) {
+            return hour >= 7 && hour < 22;
+        }
+
+        function isMorning(hour) {
+            return hour >= 6 && hour < 12;
+        }
+
+        function isAfternoon(hour) {
+            return hour >= 12 && hour < 18;
+        }
+
+        function isEvening(hour) {
+            return hour >= 18 && hour < 24;
+        }
+
         function applyFilters() {
             const dateFilter = document.getElementById('filterDate').value;
             const sort = document.getElementById('filterSort').value;
             const favFilter = document.getElementById('filterFavorites').value;
             const analysisFilter = document.getElementById('filterAnalysis').value;
+            const timeFilter = document.getElementById('filterTime').value;
 
             filteredRecordings = [...recordings];
 
@@ -729,6 +832,21 @@ INDEX_HTML_TEMPLATE = '''<!DOCTYPE html>
                 filteredRecordings = filteredRecordings.filter(r => r.llm_analysis && r.llm_analysis.is_false_positive);
             } else if (analysisFilter === 'unanalyzed') {
                 filteredRecordings = filteredRecordings.filter(r => !r.llm_analysis);
+            }
+
+            // Time of day filter
+            if (timeFilter !== 'all') {
+                filteredRecordings = filteredRecordings.filter(r => {
+                    const hour = getHour(r.start_time);
+                    switch (timeFilter) {
+                        case 'night': return isNightTime(hour);
+                        case 'day': return isDayTime(hour);
+                        case 'morning': return isMorning(hour);
+                        case 'afternoon': return isAfternoon(hour);
+                        case 'evening': return isEvening(hour);
+                        default: return true;
+                    }
+                });
             }
 
             if (dateFilter) {
@@ -774,15 +892,27 @@ INDEX_HTML_TEMPLATE = '''<!DOCTYPE html>
                 const isAnalyzed = analysis !== null;
                 const hasPerson = analysis && analysis.has_person;
 
-                // Build screenshot preview images
-                const screenshotImgs = screenshots.map((s, idx) =>
-                    `<img class="screenshot-preview" data-idx="${idx}" src="${basePath}/${s}" alt="Preview ${idx + 1}">`
-                ).join('');
+                // Select 4 frames evenly distributed from screenshots
+                const frameCount = Math.min(4, screenshots.length);
+                const frameIndices = [];
+                if (frameCount === 1) {
+                    frameIndices.push(0);
+                } else {
+                    for (let fi = 0; fi < frameCount; fi++) {
+                        const idx = Math.floor(fi * (screenshots.length - 1) / (frameCount - 1));
+                        frameIndices.push(idx);
+                    }
+                }
+                const selectedFrames = frameIndices.map(idx => screenshots[idx]);
 
-                // Build progress segments
-                const progressSegments = screenshots.map((_, idx) =>
-                    `<div class="segment" data-idx="${idx}"></div>`
-                ).join('');
+                // Build 4-frame grid
+                const frameGridHtml = selectedFrames.map((s, idx) => {
+                    const frameTime = Math.floor(frameIndices[idx] * 5) + 1; // Assuming 5-second intervals
+                    return `<div class="frame-cell">
+                        <img src="${basePath}/${s}" alt="Frame ${idx + 1}" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 160 90%22><rect fill=%22%23333%22 width=%22160%22 height=%2290%22/><text x=%2280%22 y=%2250%22 fill=%22%23666%22 text-anchor=%22middle%22 font-size=%2212%22>No frame</text></svg>'">
+                        <span class="frame-index">${frameTime}s</span>
+                    </div>`;
+                }).join('');
 
                 // Card classes based on selection mode
                 const cardClasses = ['card'];
@@ -794,17 +924,21 @@ INDEX_HTML_TEMPLATE = '''<!DOCTYPE html>
                     ? `onclick="toggleSelection('${r.filename}', event)"`
                     : `onclick="openModal(${i})"`;
 
+                // Determine thumb class
+                const thumbClasses = ['card-thumb', 'has-grid'];
+                if (frameCount === 1) thumbClasses.push('single-frame');
+
                 return `
                     <div class="${cardClasses.join(' ')}" data-filename="${r.filename}">
-                        <div class="card-thumb" data-index="${i}" ${thumbClick} onmouseenter="startPreview(this)" onmouseleave="stopPreview(this)">
-                            <img class="main-thumb" src="${basePath}/${thumbName}" alt="Thumbnail" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 320 180%22><rect fill=%22%23333%22 width=%22320%22 height=%22180%22/><text x=%22160%22 y=%2290%22 fill=%22%23666%22 text-anchor=%22middle%22>No preview</text></svg>'">
-                            ${screenshotImgs}
+                        <div class="${thumbClasses.join(' ')}" data-index="${i}" ${thumbClick}>
+                            <div class="frame-grid">
+                                ${frameGridHtml}
+                            </div>
                             ${isFav ? '<div class="favorite-badge">★</div>' : ''}
                             ${isAnalyzed ? '<div class="analyzed-badge">✓</div>' : ''}
                             ${hasPerson ? '<div class="person-badge">👤 PERSON</div>' : (isFP ? '<div class="fp-badge">FP</div>' : '')}
                             <div class="play-icon"></div>
                             <div class="duration">${formatDuration(r.duration)}</div>
-                            ${screenshots.length > 1 ? `<div class="screenshot-progress">${progressSegments}</div>` : ''}
                         </div>
                         <div class="card-info">
                             <div class="card-details" onclick="${selectionMode ? `toggleSelection('${r.filename}', event)` : `openModal(${i})`}">
@@ -940,6 +1074,7 @@ INDEX_HTML_TEMPLATE = '''<!DOCTYPE html>
         document.getElementById('filterSort').addEventListener('change', applyFilters);
         document.getElementById('filterFavorites').addEventListener('change', applyFilters);
         document.getElementById('filterAnalysis').addEventListener('change', applyFilters);
+        document.getElementById('filterTime').addEventListener('change', applyFilters);
 
         async function analyzeRecording(filename, event) {
             if (event) event.stopPropagation();

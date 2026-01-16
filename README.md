@@ -45,6 +45,7 @@ All options are configurable via the Home Assistant add-on Configuration tab.
 | `recording_pre_roll` | 6 | Seconds to capture before motion |
 | `recording_post_roll` | 5 | Seconds to capture after motion ends |
 | `motion_cooldown` | 10 | Seconds without motion before ending detection |
+| `light_change_threshold` | 0 | Brightness change % to log (0=disabled, for debugging) |
 | `recordings_path` | /share/security_recordings | Where to save recordings |
 | `max_recordings` | 50 | Maximum recordings to keep |
 | `log_level` | info | Logging level (debug/info/warning/error) |
