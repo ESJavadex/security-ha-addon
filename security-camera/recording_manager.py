@@ -29,6 +29,7 @@ class Recording:
     start_time: float
     end_time: Optional[float] = None
     duration: Optional[float] = None
+    wall_clock_duration: Optional[float] = None  # Wall-clock time for reference
     filesize: Optional[int] = None
     thumbnail: Optional[str] = None
     screenshots: Optional[List[str]] = None  # List of screenshot filenames
@@ -90,12 +91,23 @@ class RecordingManager:
         self._stop_timer: Optional[threading.Timer] = None
         self._lock = threading.Lock()
 
+        # Segment tracking for ffmpeg restart on stream interruptions
+        self._segment_files: List[str] = []
+        self._segment_index: int = 0
+        self._monitor_thread: Optional[threading.Thread] = None
+        self._monitor_stop_event = threading.Event()
+        self._recording_start_wall: Optional[float] = None
+
         # Create recordings directory
         self.recordings_path.mkdir(parents=True, exist_ok=True)
 
         # Metadata file
         self.metadata_file = self.recordings_path / "recordings.json"
         self._recordings: List[Recording] = self._load_metadata()
+
+        # Repair metadata durations in background (fixes wall-clock durations)
+        if self._recordings:
+            self.repair_metadata()
 
     def _load_metadata(self) -> List[Recording]:
         """Load recording metadata from JSON file, removing orphaned entries."""
@@ -242,6 +254,256 @@ class RecordingManager:
                     return True
         return False
 
+    def _get_ffprobe_duration(self, video_path: Path) -> Optional[float]:
+        """Get actual video duration using ffprobe.
+
+        Returns:
+            Duration in seconds, or None if ffprobe fails.
+        """
+        try:
+            probe_cmd = [
+                'ffprobe',
+                '-v', 'error',
+                '-show_entries', 'format=duration',
+                '-of', 'default=noprint_wrappers=1:nokey=1',
+                str(video_path)
+            ]
+            result = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=30)
+            if result.returncode == 0 and result.stdout.strip():
+                return float(result.stdout.strip())
+        except Exception as e:
+            logger.warning(f"ffprobe failed for {video_path}: {e}")
+        return None
+
+    def _launch_ffmpeg_segment(self) -> Optional[subprocess.Popen]:
+        """Launch ffmpeg to record a single segment from the stream.
+
+        Records without a time limit (-t flag removed); duration is managed
+        explicitly by terminating the process when recording should stop.
+        Adds HLS resilience flags for more reliable stream capture.
+
+        Returns:
+            The Popen process, or None if launch failed.
+        """
+        if not self._current_recording:
+            return None
+
+        segment_name = self._current_recording.filename.replace(
+            '.mp4', f'_seg{self._segment_index:03d}.mp4'
+        )
+        segment_path = self.recordings_path / segment_name
+        self._segment_index += 1
+
+        cmd = [
+            'ffmpeg',
+            '-rw_timeout', '10000000',   # 10s read/write timeout for HLS resilience
+            '-i', self.stream_url,
+            '-c', 'copy',                # No transcoding
+            '-movflags', '+faststart',
+            '-y',
+            '-loglevel', 'error',
+            str(segment_path)
+        ]
+
+        try:
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            self._segment_files.append(str(segment_path))
+            logger.info(f"ffmpeg segment started: {segment_name} (PID {proc.pid})")
+            return proc
+        except Exception as e:
+            logger.error(f"Failed to launch ffmpeg segment: {e}")
+            return None
+
+    def _monitor_ffmpeg(self):
+        """Monitor ffmpeg process and restart if it dies during recording.
+
+        Runs in a background thread. Checks every 2 seconds whether ffmpeg
+        is still alive. If it has exited unexpectedly, starts a new segment.
+        Also enforces max_duration by triggering a stop when elapsed time
+        exceeds the limit.
+        """
+        logger.debug("ffmpeg monitor thread started")
+        while not self._monitor_stop_event.wait(timeout=2.0):
+            with self._lock:
+                if not self._recording:
+                    break
+                if self._ffmpeg_process is None:
+                    continue
+
+                retcode = self._ffmpeg_process.poll()
+                if retcode is not None:
+                    # ffmpeg has exited unexpectedly
+                    stderr_output = ""
+                    try:
+                        stderr_output = self._ffmpeg_process.stderr.read().decode(errors='replace')[:500]
+                    except Exception:
+                        pass
+                    logger.warning(
+                        f"ffmpeg exited with code {retcode} during active recording. "
+                        f"stderr: {stderr_output}"
+                    )
+
+                    # Check if max duration reached
+                    elapsed = time.time() - (self._recording_start_wall or time.time())
+                    if elapsed >= self.max_duration:
+                        logger.info(f"Max recording duration ({self.max_duration}s) reached")
+                        self._ffmpeg_process = None
+                        threading.Thread(target=self._stop_recording, daemon=True).start()
+                        break
+
+                    # Attempt restart with new segment
+                    logger.info("Restarting ffmpeg for new segment...")
+                    new_proc = self._launch_ffmpeg_segment()
+                    if new_proc:
+                        self._ffmpeg_process = new_proc
+                        logger.info("ffmpeg restarted successfully")
+                    else:
+                        logger.error("ffmpeg restart failed, will retry in 2s")
+                        self._ffmpeg_process = None
+                else:
+                    # ffmpeg still running, check max_duration
+                    elapsed = time.time() - (self._recording_start_wall or time.time())
+                    if elapsed >= self.max_duration:
+                        logger.info(f"Max recording duration ({self.max_duration}s) reached, stopping")
+                        threading.Thread(target=self._stop_recording, daemon=True).start()
+                        break
+
+        logger.debug("ffmpeg monitor thread stopped")
+
+    def _concatenate_segments(self, final_path: Path) -> bool:
+        """Concatenate multiple segment files into a single MP4.
+
+        Uses ffmpeg concat demuxer. Filters out empty or missing segments.
+
+        Args:
+            final_path: Desired output file path.
+
+        Returns:
+            True if concatenation succeeded, False otherwise.
+        """
+        # Filter out empty or missing segment files
+        valid_segments = []
+        for seg_path_str in self._segment_files:
+            seg_path = Path(seg_path_str)
+            if seg_path.exists() and seg_path.stat().st_size > 0:
+                valid_segments.append(seg_path_str)
+            else:
+                logger.warning(f"Skipping empty/missing segment: {seg_path_str}")
+
+        if not valid_segments:
+            logger.error("No valid segments to concatenate")
+            return False
+
+        if len(valid_segments) == 1:
+            # Single segment: just rename
+            single = Path(valid_segments[0])
+            try:
+                single.rename(final_path)
+                logger.info(f"Single segment renamed to {final_path.name}")
+                return True
+            except OSError as e:
+                logger.error(f"Failed to rename segment: {e}")
+                return False
+
+        # Write concat list file for ffmpeg
+        concat_list_path = self.recordings_path / f"_concat_{final_path.stem}.txt"
+        try:
+            with open(concat_list_path, 'w') as f:
+                for seg in valid_segments:
+                    escaped = seg.replace("'", "'\\''")
+                    f.write(f"file '{escaped}'\n")
+
+            cmd = [
+                'ffmpeg',
+                '-f', 'concat',
+                '-safe', '0',
+                '-i', str(concat_list_path),
+                '-c', 'copy',
+                '-movflags', '+faststart',
+                '-y',
+                '-loglevel', 'error',
+                str(final_path)
+            ]
+
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            if result.returncode != 0:
+                logger.error(f"Concat failed: {result.stderr}")
+                return False
+
+            logger.info(f"Concatenated {len(valid_segments)} segments into {final_path.name}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Concatenation error: {e}")
+            return False
+
+        finally:
+            # Clean up concat list file
+            try:
+                concat_list_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+            # Clean up segment files
+            for seg in self._segment_files:
+                try:
+                    seg_path = Path(seg)
+                    if seg_path.exists() and seg_path != final_path:
+                        seg_path.unlink()
+                except Exception as e:
+                    logger.warning(f"Failed to clean up segment {seg}: {e}")
+
+    def repair_metadata(self):
+        """Re-calculate duration for existing recordings using ffprobe.
+
+        Fixes recordings that have inaccurate wall-clock durations.
+        Runs in a background thread to avoid blocking startup.
+        """
+        def _do_repair():
+            repaired = 0
+            errors = 0
+            for recording in self._recordings:
+                filepath = Path(recording.filepath)
+                if not filepath.exists():
+                    continue
+
+                actual_duration = self._get_ffprobe_duration(filepath)
+                if actual_duration is None:
+                    errors += 1
+                    continue
+
+                with self._lock:
+                    # Store old duration as wall_clock if not already set
+                    if recording.wall_clock_duration is None and recording.duration is not None:
+                        recording.wall_clock_duration = recording.duration
+
+                    # Only update if the difference is significant (>10% and >5s)
+                    if recording.duration is not None:
+                        diff = abs(recording.duration - actual_duration)
+                        pct = diff / max(recording.duration, 1) * 100
+                        if diff > 5 and pct > 10:
+                            logger.info(
+                                f"Repairing {recording.filename}: "
+                                f"old={recording.duration:.1f}s, actual={actual_duration:.1f}s "
+                                f"(diff={diff:.1f}s, {pct:.0f}%)"
+                            )
+                            recording.duration = actual_duration
+                            repaired += 1
+                    else:
+                        recording.duration = actual_duration
+                        repaired += 1
+
+            if repaired > 0:
+                with self._lock:
+                    self._save_metadata()
+                logger.info(f"Metadata repair complete: {repaired} recordings updated, {errors} errors")
+            else:
+                logger.info(f"Metadata repair: no corrections needed ({errors} errors)")
+
+        thread = threading.Thread(target=_do_repair, daemon=True)
+        thread.start()
+        logger.info("Starting metadata repair in background thread")
+
     def _generate_filename(self) -> str:
         """Generate a unique filename for the recording."""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -269,18 +531,9 @@ class RecordingManager:
         base_name = video_path.stem  # e.g., "motion_20241127_143022"
 
         # Get video duration using ffprobe
-        try:
-            probe_cmd = [
-                'ffprobe',
-                '-v', 'error',
-                '-show_entries', 'format=duration',
-                '-of', 'default=noprint_wrappers=1:nokey=1',
-                str(video_path)
-            ]
-            result = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=30)
-            duration = float(result.stdout.strip())
-        except Exception as e:
-            logger.warning(f"Could not get video duration: {e}, using 30s fallback")
+        duration = self._get_ffprobe_duration(video_path)
+        if duration is None:
+            logger.warning("Could not get video duration, using 30s fallback")
             duration = 30.0
 
         # Generate screenshots at intervals
@@ -400,6 +653,10 @@ class RecordingManager:
         """
         Start recording video from stream.
 
+        Uses a segment-based approach: ffmpeg records to segment files, and a
+        monitor thread watches for ffmpeg crashes and restarts it automatically.
+        On stop, segments are concatenated into a single MP4.
+
         Args:
             motion_start_time: Timestamp when motion was first detected (for pre-roll)
         """
@@ -413,6 +670,9 @@ class RecordingManager:
                 return
 
             self._recording = True
+            self._segment_files = []
+            self._segment_index = 0
+            self._recording_start_wall = time.time()
 
             filename = self._generate_filename()
             filepath = self.recordings_path / filename
@@ -425,29 +685,20 @@ class RecordingManager:
 
             logger.info(f"Starting recording: {filename}")
 
-            # Start ffmpeg to record stream
-            cmd = [
-                'ffmpeg',
-                '-i', self.stream_url,
-                '-c', 'copy',  # Copy codec, no transcoding
-                '-movflags', '+faststart',  # Enable streaming
-                '-t', str(self.max_duration),  # Max duration
-                '-y',  # Overwrite
-                '-loglevel', 'error',
-                str(filepath)
-            ]
-
-            try:
-                self._ffmpeg_process = subprocess.Popen(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE
-                )
-                logger.debug(f"ffmpeg started with PID {self._ffmpeg_process.pid}")
-            except Exception as e:
-                logger.error(f"Error starting ffmpeg: {e}")
+            # Launch first segment
+            self._ffmpeg_process = self._launch_ffmpeg_segment()
+            if self._ffmpeg_process is None:
+                logger.error("Failed to start initial ffmpeg segment")
                 self._recording = False
                 self._current_recording = None
+                return
+
+            # Start monitor thread to watch for ffmpeg crashes
+            self._monitor_stop_event.clear()
+            self._monitor_thread = threading.Thread(
+                target=self._monitor_ffmpeg, daemon=True
+            )
+            self._monitor_thread.start()
 
     def extend_recording(self):
         """Extend recording by canceling any pending stop."""
@@ -471,30 +722,79 @@ class RecordingManager:
             self._stop_timer.start()
 
     def _stop_recording(self):
-        """Stop the current recording."""
+        """Stop the current recording.
+
+        Stops the monitor thread, terminates ffmpeg, concatenates segments
+        if multiple exist, and calculates the real duration using ffprobe.
+        """
         with self._lock:
             if not self._recording:
                 return
 
             self._recording = False
 
+            # Signal monitor thread to stop
+            self._monitor_stop_event.set()
+
+            # Terminate ffmpeg
             if self._ffmpeg_process:
-                # Send SIGINT to ffmpeg for clean shutdown
                 self._ffmpeg_process.terminate()
                 try:
                     self._ffmpeg_process.wait(timeout=10)
                 except subprocess.TimeoutExpired:
                     self._ffmpeg_process.kill()
+                    try:
+                        self._ffmpeg_process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        pass
                 self._ffmpeg_process = None
 
             if self._current_recording:
-                self._current_recording.end_time = time.time()
-                self._current_recording.duration = (
-                    self._current_recording.end_time - self._current_recording.start_time
-                )
+                end_time = time.time()
+                self._current_recording.end_time = end_time
+                wall_clock_duration = end_time - self._current_recording.start_time
+
+                filepath = Path(self._current_recording.filepath)
+
+                # Concatenate segments into final file
+                if self._segment_files:
+                    if len(self._segment_files) > 1:
+                        success = self._concatenate_segments(filepath)
+                        if not success:
+                            # Fallback: use the largest segment as the recording
+                            largest = None
+                            largest_size = 0
+                            for seg in self._segment_files:
+                                sp = Path(seg)
+                                if sp.exists():
+                                    sz = sp.stat().st_size
+                                    if sz > largest_size:
+                                        largest = sp
+                                        largest_size = sz
+                            if largest and largest != filepath:
+                                try:
+                                    largest.rename(filepath)
+                                except OSError as e:
+                                    logger.error(f"Failed to use largest segment as fallback: {e}")
+                    elif len(self._segment_files) == 1:
+                        # Single segment: rename to final filename
+                        seg_path = Path(self._segment_files[0])
+                        if seg_path.exists() and seg_path != filepath:
+                            try:
+                                seg_path.rename(filepath)
+                            except OSError as e:
+                                logger.error(f"Failed to rename single segment: {e}")
+
+                # Get actual video duration via ffprobe
+                actual_duration = None
+                if filepath.exists():
+                    actual_duration = self._get_ffprobe_duration(filepath)
+
+                # Use ffprobe duration if available, fallback to wall clock
+                self._current_recording.duration = actual_duration if actual_duration else wall_clock_duration
+                self._current_recording.wall_clock_duration = wall_clock_duration
 
                 # Get file size
-                filepath = Path(self._current_recording.filepath)
                 if filepath.exists():
                     self._current_recording.filesize = filepath.stat().st_size
 
@@ -510,7 +810,9 @@ class RecordingManager:
 
                     logger.info(
                         f"Recording saved: {self._current_recording.filename} "
-                        f"({self._current_recording.duration:.1f}s, "
+                        f"(video={self._current_recording.duration:.1f}s, "
+                        f"wall={wall_clock_duration:.1f}s, "
+                        f"segments={len(self._segment_files)}, "
                         f"{self._current_recording.filesize / 1024 / 1024:.1f}MB)"
                     )
 
@@ -524,9 +826,15 @@ class RecordingManager:
                     logger.error(f"Recording file not found: {filepath}")
 
                 self._current_recording = None
+                self._segment_files = []
 
             # Cleanup old recordings
             self._cleanup_old_recordings()
+
+        # Wait for monitor thread outside the lock
+        if self._monitor_thread and self._monitor_thread.is_alive():
+            self._monitor_thread.join(timeout=5)
+        self._monitor_thread = None
 
     def stop_recording_immediate(self):
         """Stop recording immediately without post-roll."""
