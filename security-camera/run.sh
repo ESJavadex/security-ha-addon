@@ -249,6 +249,7 @@ detector = MotionDetector(
 
 # Start services
 ha.start()
+recorder.start_buffer()
 detector.start()
 
 logging.info('Motion detection service started')
@@ -279,6 +280,7 @@ except KeyboardInterrupt:
     logging.info('Shutting down...')
     detector.stop()
     recorder.stop_recording_immediate()
+    recorder.stop_buffer()
     ha.stop()
 "
 
