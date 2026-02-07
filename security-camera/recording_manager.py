@@ -98,6 +98,15 @@ class RecordingManager:
         self._monitor_stop_event = threading.Event()
         self._recording_start_wall: Optional[float] = None
 
+        # Rolling buffer for pre-roll capture
+        self._buffer_dir = self.recordings_path / "_buffer"
+        self._buffer_dir.mkdir(parents=True, exist_ok=True)
+        self._buffer_process: Optional[subprocess.Popen] = None
+        self._buffer_thread: Optional[threading.Thread] = None
+        self._buffer_running = False
+        self._buffer_segment_secs = 5
+        self._buffer_keep_count = max(1, (self.pre_roll // self._buffer_segment_secs) + 1)
+
         # Create recordings directory
         self.recordings_path.mkdir(parents=True, exist_ok=True)
 
@@ -649,6 +658,215 @@ class RecordingManager:
         except Exception as e:
             logger.error(f"Error removing recording files {recording.filename}: {e}")
 
+    # ── Rolling pre-roll buffer ────────────────────────────────────────
+
+    def start_buffer(self):
+        """Start the rolling pre-roll buffer in a background thread.
+
+        The buffer continuously records short segments (5s each) from the
+        stream using ffmpeg -c copy (no transcoding). Old segments are
+        pruned to keep only the most recent ones (enough for pre_roll seconds).
+        The buffer pauses automatically while a recording is active.
+        """
+        if self._buffer_running:
+            logger.warning("Buffer already running")
+            return
+        if self.pre_roll <= 0:
+            logger.info("Pre-roll is 0, buffer disabled")
+            return
+
+        self._buffer_running = True
+        self._buffer_thread = threading.Thread(target=self._run_buffer, daemon=True)
+        self._buffer_thread.start()
+        logger.info(
+            f"Rolling buffer started ({self.pre_roll}s pre-roll, "
+            f"{self._buffer_segment_secs}s segments, keep {self._buffer_keep_count})"
+        )
+
+    def stop_buffer(self):
+        """Stop the rolling pre-roll buffer."""
+        self._buffer_running = False
+        self._stop_buffer_ffmpeg()
+        if self._buffer_thread:
+            self._buffer_thread.join(timeout=10)
+            self._buffer_thread = None
+        # Clean up any leftover buffer files
+        self._clean_buffer_dir()
+        logger.info("Rolling buffer stopped")
+
+    def _run_buffer(self):
+        """Background thread: keeps buffer ffmpeg alive, prunes old segments.
+
+        Pauses when self._recording is True (buffer not needed during active
+        recording) and restarts automatically when recording ends.
+        """
+        logger.debug("Buffer thread started")
+        while self._buffer_running:
+            try:
+                if self._recording:
+                    # Recording active — pause buffer, wait and check again
+                    self._stop_buffer_ffmpeg()
+                    time.sleep(2)
+                    continue
+
+                # Ensure buffer ffmpeg is running
+                if self._buffer_process is None or self._buffer_process.poll() is not None:
+                    if self._buffer_process is not None:
+                        # Previous process died, log it
+                        retcode = self._buffer_process.poll()
+                        logger.debug(f"Buffer ffmpeg exited (code {retcode}), restarting")
+                    self._launch_buffer_ffmpeg()
+
+                # Prune old segments
+                self._prune_buffer_segments()
+
+            except Exception as e:
+                logger.error(f"Buffer thread error: {e}")
+
+            time.sleep(2)
+
+        logger.debug("Buffer thread exiting")
+
+    def _launch_buffer_ffmpeg(self):
+        """Start ffmpeg to write rolling segments into _buffer/ dir.
+
+        Uses ffmpeg segment muxer with -c copy for negligible CPU usage.
+        Segment filenames include a timestamp prefix for chronological ordering.
+        """
+        self._stop_buffer_ffmpeg()  # Kill any stale process
+
+        ts_prefix = datetime.now().strftime("%Y%m%d_%H%M%S")
+        segment_pattern = str(self._buffer_dir / f"buf_{ts_prefix}_%04d.mp4")
+
+        cmd = [
+            'ffmpeg',
+            '-rw_timeout', '10000000',
+            '-i', self.stream_url,
+            '-c', 'copy',
+            '-f', 'segment',
+            '-segment_time', str(self._buffer_segment_secs),
+            '-reset_timestamps', '1',
+            '-movflags', '+faststart',
+            '-loglevel', 'error',
+            '-y',
+            segment_pattern
+        ]
+
+        try:
+            self._buffer_process = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            )
+            logger.debug(f"Buffer ffmpeg launched (PID {self._buffer_process.pid})")
+        except Exception as e:
+            logger.error(f"Failed to launch buffer ffmpeg: {e}")
+            self._buffer_process = None
+
+    def _stop_buffer_ffmpeg(self):
+        """Terminate the buffer ffmpeg process gracefully."""
+        if self._buffer_process is None:
+            return
+
+        try:
+            self._buffer_process.terminate()
+            try:
+                self._buffer_process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self._buffer_process.kill()
+                try:
+                    self._buffer_process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    pass
+        except Exception as e:
+            logger.warning(f"Error stopping buffer ffmpeg: {e}")
+        finally:
+            self._buffer_process = None
+
+    def _prune_buffer_segments(self):
+        """Keep only the latest N+1 buffer segments, delete older ones.
+
+        Segments are sorted by filename (which embeds a timestamp).
+        We keep one extra segment beyond what's needed because the newest
+        segment is still being written to and may be incomplete.
+        """
+        try:
+            segments = sorted(self._buffer_dir.glob("buf_*.mp4"))
+            keep = self._buffer_keep_count + 1  # +1 for the segment currently being written
+            if len(segments) > keep:
+                for old_seg in segments[:-keep]:
+                    try:
+                        old_seg.unlink()
+                        logger.debug(f"Pruned old buffer segment: {old_seg.name}")
+                    except Exception as e:
+                        logger.warning(f"Failed to prune {old_seg.name}: {e}")
+        except Exception as e:
+            logger.warning(f"Error pruning buffer segments: {e}")
+
+    def _clean_buffer_dir(self):
+        """Remove all files from the buffer directory."""
+        try:
+            for f in self._buffer_dir.glob("*"):
+                try:
+                    f.unlink()
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.warning(f"Error cleaning buffer dir: {e}")
+
+    def _capture_pre_roll(self) -> List[str]:
+        """Stop the buffer ffmpeg and collect valid segments for pre-roll.
+
+        Kills the buffer ffmpeg process (which finalizes the current segment),
+        then moves all valid (non-empty) buffer segments into the recordings
+        directory with a _preroll_ prefix.
+
+        Returns:
+            List of pre-roll segment file paths (chronological order).
+        """
+        pre_roll_files: List[str] = []
+
+        # Stop buffer ffmpeg so the current segment is finalized
+        self._stop_buffer_ffmpeg()
+
+        # Brief pause to let the filesystem flush
+        time.sleep(0.3)
+
+        try:
+            segments = sorted(self._buffer_dir.glob("buf_*.mp4"))
+            if not segments:
+                logger.info("No buffer segments available for pre-roll")
+                return pre_roll_files
+
+            # Take only the last N segments (enough for pre_roll seconds)
+            segments = segments[-self._buffer_keep_count:]
+
+            for idx, seg_path in enumerate(segments):
+                if not seg_path.exists():
+                    continue
+                if seg_path.stat().st_size == 0:
+                    logger.debug(f"Skipping empty buffer segment: {seg_path.name}")
+                    continue
+
+                dest_name = f"_preroll_{idx:03d}.mp4"
+                dest_path = self.recordings_path / dest_name
+                try:
+                    seg_path.rename(dest_path)
+                    pre_roll_files.append(str(dest_path))
+                    logger.debug(f"Pre-roll segment: {seg_path.name} → {dest_name}")
+                except OSError as e:
+                    logger.warning(f"Failed to move buffer segment {seg_path.name}: {e}")
+
+            logger.info(f"Captured {len(pre_roll_files)} pre-roll segments")
+
+        except Exception as e:
+            logger.error(f"Error capturing pre-roll: {e}")
+
+        # Clean up any remaining buffer files
+        self._clean_buffer_dir()
+
+        return pre_roll_files
+
+    # ── Recording management ────────────────────────────────────────────
+
     def start_recording(self, motion_start_time: Optional[float] = None):
         """
         Start recording video from stream.
@@ -670,7 +888,6 @@ class RecordingManager:
                 return
 
             self._recording = True
-            self._segment_files = []
             self._segment_index = 0
             self._recording_start_wall = time.time()
 
@@ -685,7 +902,11 @@ class RecordingManager:
 
             logger.info(f"Starting recording: {filename}")
 
-            # Launch first segment
+            # Capture pre-roll segments from the rolling buffer
+            pre_roll_segments = self._capture_pre_roll()
+            self._segment_files = pre_roll_segments  # Pre-roll goes first
+
+            # Launch first live recording segment
             self._ffmpeg_process = self._launch_ffmpeg_segment()
             if self._ffmpeg_process is None:
                 logger.error("Failed to start initial ffmpeg segment")

@@ -1,6 +1,6 @@
 name: "Security Camera Motion Detection"
 description: "Motion detection and recording for HLS camera streams. Records clips when motion is detected and exposes sensors to Home Assistant."
-version: "0.1.20"
+version: "0.1.21"
 slug: "security_camera_motion"
 url: "https://github.com/ESJavadex/security-ha-addon"
 arch:
@@ -33,7 +33,7 @@ options:
   roi_x_end: 66
   roi_y_start: 5
   roi_y_end: 95
-  recording_pre_roll: 6
+  recording_pre_roll: 15
   recording_post_roll: 5
   motion_cooldown: 10
   light_change_threshold: 0

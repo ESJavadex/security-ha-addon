@@ -265,7 +265,7 @@ class MotionDetector:
 
         # --- Cooldown: feed frames to MOG2 with fast learning, suppress detection ---
         if self._light_cooldown_remaining > 0:
-            self.bg_subtractor.apply(small_frame, learningRate=0.5)
+            self.bg_subtractor.apply(small_frame, learningRate=1.0)
             self._light_cooldown_remaining -= 1
             logger.debug(f"Light cooldown: {self._light_cooldown_remaining} frames remaining")
             return 0
@@ -304,6 +304,12 @@ class MotionDetector:
                 self._light_changes_detected += 1
                 self.bg_subtractor.apply(small_frame, learningRate=1.0)
                 self._light_cooldown_remaining = 5
+                return 0
+            elif spread_ratio > 0.15:
+                # Residual from light change or other global change
+                logger.info(f"Elevated motion spread: {spread_ratio:.1%} - extending adaptation")
+                self.bg_subtractor.apply(small_frame, learningRate=1.0)
+                self._light_cooldown_remaining = 2  # Brief extension
                 return 0
 
         return total_area
