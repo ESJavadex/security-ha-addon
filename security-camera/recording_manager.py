@@ -306,6 +306,7 @@ class RecordingManager:
         cmd = [
             'ffmpeg',
             '-rw_timeout', '10000000',   # 10s read/write timeout for HLS resilience
+            '-live_start_index', '-1',   # Start from live edge (avoid replaying HLS playlist window)
             '-i', self.stream_url,
             '-c', 'copy',                # No transcoding
             '-movflags', '+faststart',
