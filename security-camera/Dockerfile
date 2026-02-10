@@ -28,7 +28,7 @@ RUN pip install --no-cache-dir \
 RUN mkdir -p /app /share/security_recordings
 
 # Cache buster - change this value to force rebuild of COPY layers
-ARG CACHE_BUST=20260210v3
+ARG CACHE_BUST=20260210v4
 
 # Copy application files
 COPY motion_detector.py /app/
