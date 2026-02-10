@@ -306,7 +306,6 @@ class RecordingManager:
         cmd = [
             'ffmpeg',
             '-rw_timeout', '10000000',   # 10s read/write timeout for HLS resilience
-            '-live_start_index', '-1',   # Start from live edge (avoid replaying HLS playlist window)
             '-i', self.stream_url,
             '-c', 'copy',                # No transcoding
             '-movflags', '+faststart',
@@ -917,9 +916,10 @@ class RecordingManager:
 
             logger.info(f"Starting recording: {filename}")
 
-            # Capture pre-roll segments from the rolling buffer
-            pre_roll_segments = self._capture_pre_roll()
-            self._segment_files = pre_roll_segments  # Pre-roll goes first
+            # Pre-roll is handled by the HLS playlist window: ffmpeg naturally
+            # starts from the beginning of the available playlist (~6-10s before
+            # "now"), which provides built-in pre-roll without a separate buffer.
+            self._segment_files = []
 
             # Launch first live recording segment
             self._ffmpeg_process = self._launch_ffmpeg_segment()
