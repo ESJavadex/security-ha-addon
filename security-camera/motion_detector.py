@@ -48,11 +48,9 @@ class MotionDetector:
         self,
         stream_url: str,
         motion_threshold: int = 5000,
-        min_duration: float = 3.0,
+        min_duration: float = 5.0,
         check_interval: float = 1.0,
         motion_cooldown: float = 10.0,
-        light_change_threshold: float = 0.0,  # Disabled by default - set >0 to enable
-        light_change_cooldown: int = 3,
         roi_x_start: int = 0,
         roi_x_end: int = 100,
         roi_y_start: int = 0,
@@ -71,8 +69,6 @@ class MotionDetector:
             min_duration: Seconds motion must persist before triggering
             check_interval: Seconds between frame checks
             motion_cooldown: Seconds without motion before ending detection
-            light_change_threshold: Percentage brightness change to detect light switch (0=disabled)
-            light_change_cooldown: Frames to skip after detecting a light change
             roi_x_start: Left boundary of detection zone (0-100 percentage)
             roi_x_end: Right boundary of detection zone (0-100 percentage)
             roi_y_start: Top boundary of detection zone (0-100 percentage)
@@ -87,8 +83,6 @@ class MotionDetector:
         self.min_duration = min_duration
         self.check_interval = check_interval
         self.motion_cooldown = motion_cooldown
-        self.light_change_threshold = light_change_threshold  # 0 = disabled
-        self.light_change_cooldown_frames = light_change_cooldown
         self.roi_x_start = max(0, min(100, roi_x_start))
         self.roi_x_end = max(0, min(100, roi_x_end))
         self.roi_y_start = max(0, min(100, roi_y_start))
@@ -111,11 +105,6 @@ class MotionDetector:
         self.state = MotionState.IDLE
         self.motion_start_time: Optional[float] = None
         self.last_motion_time: Optional[float] = None
-
-        # Light change detection and filtering
-        self._last_brightness: Optional[float] = None
-        self._light_changes_detected: int = 0
-        self._light_cooldown_remaining: int = 0  # Frames to suppress after light change
 
         # Thread control
         self._running = False
@@ -193,46 +182,15 @@ class MotionDetector:
             logger.error(f"OpenCV frame extraction error: {e}")
             return None
 
-    def _calculate_brightness(self, frame: np.ndarray) -> float:
-        """Calculate average brightness of a frame (0-255)."""
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        return float(np.mean(gray))
-
-    def _is_light_change(self, current_brightness: float) -> bool:
-        """
-        Check if a sudden light change occurred.
-
-        Returns True only for very obvious light switches (on/off).
-        Conservative to avoid missing real motion.
-        """
-        if self.light_change_threshold <= 0:
-            return False  # Disabled
-
-        if self._last_brightness is None:
-            return False
-
-        # Calculate percentage change
-        brightness_diff = abs(current_brightness - self._last_brightness)
-        brightness_pct_change = (brightness_diff / max(self._last_brightness, 1)) * 100
-
-        # Only trigger on very significant changes (default 15%)
-        if brightness_pct_change > self.light_change_threshold:
-            logger.info(f"Light change detected: {brightness_pct_change:.1f}% change "
-                       f"(threshold: {self.light_change_threshold}%)")
-            self._light_changes_detected += 1
-            return True
-
-        return False
-
     def _detect_motion(self, frame: np.ndarray) -> int:
         """
         Detect motion in frame using background subtraction.
-        Includes two-layer light change filtering to reduce false positives:
-          Layer 1: Motion spread ratio (always active) - catches global illumination changes
-          Layer 2: Brightness-based cooldown (when light_change_threshold > 0)
+
+        Simple algorithm: ROI crop → resize → MOG2 → morphology → contours → area.
+        The min_duration filter handles transient false positives.
 
         Returns:
-            Total area of motion contours (0 if suppressed by light filtering)
+            Total area of motion contours
         """
         # Crop to region of interest (ROI) - configurable detection zone
         height, width = frame.shape[:2]
@@ -244,33 +202,11 @@ class MotionDetector:
 
         logger.debug(f"ROI: x={left_bound}-{right_bound}, y={top_bound}-{bottom_bound}")
 
-        # Calculate brightness for light change detection
-        current_brightness = self._calculate_brightness(roi_frame)
-
-        # Resize for faster processing (optional, reduces CPU load)
+        # Resize for faster processing (reduces CPU load)
         scale = 0.5
         small_frame = cv2.resize(roi_frame, None, fx=scale, fy=scale)
 
-        # --- Layer 2: Brightness-based cooldown (when light_change_threshold > 0) ---
-        # Check BEFORE MOG2 processing so we can force-adapt immediately
-        if self._is_light_change(current_brightness):
-            logger.info("Brightness light change: force-adapting MOG2 and entering cooldown")
-            # Note: _is_light_change() already incremented _light_changes_detected
-            self.bg_subtractor.apply(small_frame, learningRate=1.0)
-            self._light_cooldown_remaining = 5
-            self._last_brightness = current_brightness
-            return 0
-
-        self._last_brightness = current_brightness
-
-        # --- Cooldown: feed frames to MOG2 with fast learning, suppress detection ---
-        if self._light_cooldown_remaining > 0:
-            self.bg_subtractor.apply(small_frame, learningRate=1.0)
-            self._light_cooldown_remaining -= 1
-            logger.debug(f"Light cooldown: {self._light_cooldown_remaining} frames remaining")
-            return 0
-
-        # Apply background subtraction (normal learning rate)
+        # Apply background subtraction
         fg_mask = self.bg_subtractor.apply(small_frame)
 
         # Clean up mask
@@ -290,27 +226,6 @@ class MotionDetector:
 
         # Scale back to original frame size
         total_area = int(total_area / (scale * scale))
-
-        # --- Layer 1: Motion spread ratio (always active, zero config) ---
-        # A person covers 1-8% of ROI; very close = 20-30%. Global illumination
-        # changes (light on/off, IR switch) affect 40%+ of pixels.
-        roi_h, roi_w = roi_frame.shape[:2]
-        roi_area = roi_h * roi_w
-        if roi_area > 0 and total_area > 0:
-            spread_ratio = total_area / roi_area
-            if spread_ratio > 0.4:
-                logger.info(f"Global illumination change detected: {spread_ratio:.1%} of ROI "
-                           f"({total_area}/{roi_area} pixels) - suppressing")
-                self._light_changes_detected += 1
-                self.bg_subtractor.apply(small_frame, learningRate=1.0)
-                self._light_cooldown_remaining = 5
-                return 0
-            elif spread_ratio > 0.15:
-                # Residual from light change or other global change
-                logger.info(f"Elevated motion spread: {spread_ratio:.1%} - extending adaptation")
-                self.bg_subtractor.apply(small_frame, learningRate=1.0)
-                self._light_cooldown_remaining = 2  # Brief extension
-                return 0
 
         return total_area
 
@@ -512,9 +427,6 @@ class MotionDetector:
         return {
             "frames_processed": self.frames_processed,
             "motion_events": self.motion_events,
-            "light_changes_detected": self._light_changes_detected,
-            "light_cooldown_remaining": self._light_cooldown_remaining,
-            "current_brightness": self._last_brightness,
             "state": self.state.value,
             "is_motion_active": self.is_motion_active,
             "roi_x_start": self.roi_x_start,
