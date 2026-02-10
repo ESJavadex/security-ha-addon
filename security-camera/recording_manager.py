@@ -55,8 +55,8 @@ class RecordingManager:
         self,
         stream_url: str,
         recordings_path: str = "/share/security_recordings",
-        pre_roll: int = 6,
-        post_roll: int = 5,
+        pre_roll: int = 10,
+        post_roll: int = 0,
         max_recordings: int = 50,
         max_duration: int = 300,  # 5 minutes max per clip
         llm_analyzer: Optional['LLMAnalyzer'] = None,
@@ -875,16 +875,30 @@ class RecordingManager:
         monitor thread watches for ffmpeg crashes and restarts it automatically.
         On stop, segments are concatenated into a single MP4.
 
+        If a recording is already active, it is finalized first and a new one
+        is started (split recording on new motion event).
+
         Args:
             motion_start_time: Timestamp when motion was first detected (for pre-roll)
         """
+        # Phase 1: Check if we need to stop an existing recording
+        need_stop = False
         with self._lock:
             if self._recording:
-                logger.warning("Recording already in progress")
-                # Cancel any pending stop
+                logger.info("New motion event - finalizing current recording first")
                 if self._stop_timer:
                     self._stop_timer.cancel()
                     self._stop_timer = None
+                need_stop = True
+
+        # Phase 2: Stop existing recording OUTSIDE the lock (avoids deadlock)
+        if need_stop:
+            self._stop_recording()
+
+        # Phase 3: Start new recording
+        with self._lock:
+            if self._recording:
+                logger.warning("Recording restarted by another thread, skipping")
                 return
 
             self._recording = True

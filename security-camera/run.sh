@@ -25,7 +25,6 @@ if [ -f "$CONFIG_FILE" ]; then
     RECORDING_PRE_ROLL=$(jq -r '.recording_pre_roll // empty' "$CONFIG_FILE")
     RECORDING_POST_ROLL=$(jq -r '.recording_post_roll // empty' "$CONFIG_FILE")
     MOTION_COOLDOWN=$(jq -r '.motion_cooldown // empty' "$CONFIG_FILE")
-    LIGHT_CHANGE_THRESHOLD=$(jq -r '.light_change_threshold // empty' "$CONFIG_FILE")
     RECORDINGS_PATH=$(jq -r '.recordings_path // empty' "$CONFIG_FILE")
     MAX_RECORDINGS=$(jq -r '.max_recordings // empty' "$CONFIG_FILE")
     LOG_LEVEL=$(jq -r '.log_level // empty' "$CONFIG_FILE")
@@ -49,18 +48,17 @@ fi
 # Apply defaults for any missing values
 STREAM_URL="${STREAM_URL:-http://localhost:8080/stream.m3u8}"
 MOTION_THRESHOLD="${MOTION_THRESHOLD:-5000}"
-MOTION_MIN_DURATION="${MOTION_MIN_DURATION:-3}"
-RECORDING_PRE_ROLL="${RECORDING_PRE_ROLL:-6}"
-RECORDING_POST_ROLL="${RECORDING_POST_ROLL:-5}"
+MOTION_MIN_DURATION="${MOTION_MIN_DURATION:-5}"
+RECORDING_PRE_ROLL="${RECORDING_PRE_ROLL:-10}"
+RECORDING_POST_ROLL="${RECORDING_POST_ROLL:-0}"
 MOTION_COOLDOWN="${MOTION_COOLDOWN:-10}"
-LIGHT_CHANGE_THRESHOLD="${LIGHT_CHANGE_THRESHOLD:-0}"
 RECORDINGS_PATH="${RECORDINGS_PATH:-/share/security_recordings}"
 MAX_RECORDINGS="${MAX_RECORDINGS:-50}"
 LOG_LEVEL="${LOG_LEVEL:-info}"
-ROI_X_START="${ROI_X_START:-33}"
-ROI_X_END="${ROI_X_END:-66}"
+ROI_X_START="${ROI_X_START:-0}"
+ROI_X_END="${ROI_X_END:-100}"
 ROI_Y_START="${ROI_Y_START:-5}"
-ROI_Y_END="${ROI_Y_END:-95}"
+ROI_Y_END="${ROI_Y_END:-85}"
 LLM_ENABLED="${LLM_ENABLED:-false}"
 LLM_AUTO_ANALYZE="${LLM_AUTO_ANALYZE:-false}"
 LLM_API_URL="${LLM_API_URL:-}"
@@ -75,7 +73,6 @@ export MOTION_MIN_DURATION
 export RECORDING_PRE_ROLL
 export RECORDING_POST_ROLL
 export MOTION_COOLDOWN
-export LIGHT_CHANGE_THRESHOLD
 export RECORDINGS_PATH
 export MAX_RECORDINGS
 export LOG_LEVEL
@@ -168,15 +165,14 @@ min_duration = float(os.environ['MOTION_MIN_DURATION'])
 pre_roll = int(os.environ['RECORDING_PRE_ROLL'])
 post_roll = int(os.environ['RECORDING_POST_ROLL'])
 motion_cooldown = float(os.environ.get('MOTION_COOLDOWN', 10))
-light_change_threshold = float(os.environ.get('LIGHT_CHANGE_THRESHOLD', 0))
 recordings_path = os.environ['RECORDINGS_PATH']
 max_recordings = int(os.environ['MAX_RECORDINGS'])
 state_file = os.environ['STATE_FILE']
 settings_file = os.environ.get('SETTINGS_FILE', '/share/security_settings.json')
-roi_x_start = int(os.environ.get('ROI_X_START', 33))
-roi_x_end = int(os.environ.get('ROI_X_END', 66))
+roi_x_start = int(os.environ.get('ROI_X_START', 0))
+roi_x_end = int(os.environ.get('ROI_X_END', 100))
 roi_y_start = int(os.environ.get('ROI_Y_START', 5))
-roi_y_end = int(os.environ.get('ROI_Y_END', 95))
+roi_y_end = int(os.environ.get('ROI_Y_END', 85))
 
 # LLM configuration
 llm_enabled = os.environ.get('LLM_ENABLED', 'false').lower() == 'true'
@@ -236,7 +232,6 @@ detector = MotionDetector(
     min_duration=min_duration,
     check_interval=1.0,
     motion_cooldown=motion_cooldown,
-    light_change_threshold=light_change_threshold,
     roi_x_start=roi_x_start,
     roi_x_end=roi_x_end,
     roi_y_start=roi_y_start,

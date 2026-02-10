@@ -27,6 +27,9 @@ RUN pip install --no-cache-dir \
 # Create directories
 RUN mkdir -p /app /share/security_recordings
 
+# Cache buster - change this value to force rebuild of COPY layers
+ARG CACHE_BUST=20260210v1
+
 # Copy application files
 COPY motion_detector.py /app/
 COPY recording_manager.py /app/

@@ -2149,10 +2149,10 @@ class SecurityHTTPHandler(SimpleHTTPRequestHandler):
     def _get_settings(self) -> dict:
         """Read current settings from file."""
         defaults = {
-            "roi_x_start": 33,
-            "roi_x_end": 66,
+            "roi_x_start": 0,
+            "roi_x_end": 100,
             "roi_y_start": 5,
-            "roi_y_end": 95,
+            "roi_y_end": 85,
             "motion_threshold": 5000
         }
         try:

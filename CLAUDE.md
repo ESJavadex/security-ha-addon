@@ -62,14 +62,14 @@ Environment variables (local) or config.yaml options (HA):
 |--------|---------|-------------|
 | STREAM_URL | - | HLS stream URL (m3u8) |
 | MOTION_THRESHOLD | 5000 | Pixel area to trigger (lower = more sensitive) |
-| MOTION_MIN_DURATION | 3 | Seconds motion must persist |
-| ROI_X_START | 33 | Detection zone left edge (0-100%) |
-| ROI_X_END | 66 | Detection zone right edge (0-100%) |
+| MOTION_MIN_DURATION | 5 | Seconds motion must persist before recording |
+| ROI_X_START | 0 | Detection zone left edge (0-100%) |
+| ROI_X_END | 100 | Detection zone right edge (0-100%) |
 | ROI_Y_START | 5 | Detection zone top edge (0-100%) |
-| ROI_Y_END | 95 | Detection zone bottom edge (0-100%) |
-| RECORDING_PRE_ROLL | 6 | Seconds before motion |
-| RECORDING_POST_ROLL | 5 | Seconds after motion ends |
-| MOTION_COOLDOWN | 10 | Seconds without motion before ending detection |
+| ROI_Y_END | 85 | Detection zone bottom edge (0-100%) |
+| RECORDING_PRE_ROLL | 10 | Seconds before motion (from buffer) |
+| RECORDING_POST_ROLL | 0 | Seconds after motion ends (cooldown handles gap) |
+| MOTION_COOLDOWN | 10 | Seconds without motion before stopping recording |
 | MAX_RECORDINGS | 50 | Auto-cleanup threshold |
 | LOG_LEVEL | info (HA) / debug (local) | debug/info/warning/error |
 
@@ -82,17 +82,17 @@ The ROI (Region of Interest) defines where motion is detected. Recordings are al
    ┌─────────────────────────────────┐  0%
    │ [timestamp - ignored]           │
    │─────────────────────────────────│  roi_y_start (5%)
-   │    │                      │     │
-   │    │   DETECTION ZONE     │     │
-   │    │                      │     │
-   │─────────────────────────────────│  roi_y_end (95%)
-   │ [logo - ignored]                │
+   │                                 │
+   │         DETECTION ZONE          │
+   │                                 │
+   │─────────────────────────────────│  roi_y_end (85%)
+   │ [timestamp overlay - ignored]   │
    └─────────────────────────────────┘  100%
-        ↑                      ↑
-   roi_x_start (33%)    roi_x_end (66%)
+   ↑                                 ↑
+   roi_x_start (0%)          roi_x_end (100%)
 ```
 
-**Default:** Middle third horizontally (33-66%), full height minus edges (5-95%)
+**Default:** Full width (0-100%), top 85% of frame (5-85%), excluding bottom 15% for timestamp overlay
 
 ## Web UI
 
