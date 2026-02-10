@@ -244,7 +244,8 @@ detector = MotionDetector(
 
 # Start services
 ha.start()
-recorder.start_buffer()
+# Buffer disabled: HLS playlist window provides natural pre-roll (~6-10s).
+# Running a second ffmpeg for buffering causes stream contention (stutters/repeated frames).
 detector.start()
 
 logging.info('Motion detection service started')
@@ -275,7 +276,6 @@ except KeyboardInterrupt:
     logging.info('Shutting down...')
     detector.stop()
     recorder.stop_recording_immediate()
-    recorder.stop_buffer()
     ha.stop()
 "
 
