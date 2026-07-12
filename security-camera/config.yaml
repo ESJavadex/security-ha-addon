@@ -38,6 +38,7 @@ options:
   motion_cooldown: 10
   recordings_path: "/share/security_recordings"
   max_recordings: 0
+  purge_recordings_on_start: false
   log_level: "info"
   llm_enabled: false
   llm_auto_analyze: false
@@ -58,6 +59,7 @@ schema:
   motion_cooldown: int(2,120)
   recordings_path: str
   max_recordings: int(0,10000)
+  purge_recordings_on_start: bool?
   log_level: list(debug|info|warning|error)
   llm_enabled: bool?
   llm_auto_analyze: bool?

@@ -49,6 +49,7 @@ All options are configurable via the Home Assistant add-on Configuration tab.
 | `motion_cooldown` | 10 | Seconds without motion before ending detection |
 | `recordings_path` | /share/security_recordings | Where to save recordings |
 | `max_recordings` | 50 | Maximum recordings to keep |
+| `purge_recordings_on_start` | false | Delete all recordings on next start (disable immediately after use) |
 | `log_level` | info | Logging level (debug/info/warning/error) |
 
 ## Detection Zone (ROI)
