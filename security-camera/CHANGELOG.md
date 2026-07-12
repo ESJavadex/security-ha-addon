@@ -12,3 +12,4 @@
 - Generate all preview images in a single FFmpeg pass.
 - Write recordings metadata atomically.
 - Show the build version in the UI and health endpoint.
+- Add an explicit startup option for authorized full recording resets.

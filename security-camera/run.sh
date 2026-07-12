@@ -25,6 +25,7 @@ if [ -f "$CONFIG_FILE" ]; then
     MOTION_COOLDOWN=$(jq -r '.motion_cooldown // empty' "$CONFIG_FILE")
     RECORDINGS_PATH=$(jq -r '.recordings_path // empty' "$CONFIG_FILE")
     MAX_RECORDINGS=$(jq -r '.max_recordings // empty' "$CONFIG_FILE")
+    PURGE_RECORDINGS_ON_START=$(jq -r '.purge_recordings_on_start // empty' "$CONFIG_FILE")
     LOG_LEVEL=$(jq -r '.log_level // empty' "$CONFIG_FILE")
     ROI_X_START=$(jq -r '.roi_x_start // empty' "$CONFIG_FILE")
     ROI_X_END=$(jq -r '.roi_x_end // empty' "$CONFIG_FILE")
@@ -52,6 +53,7 @@ RECORDING_POST_ROLL="${RECORDING_POST_ROLL:-0}"
 MOTION_COOLDOWN="${MOTION_COOLDOWN:-10}"
 RECORDINGS_PATH="${RECORDINGS_PATH:-/share/security_recordings}"
 MAX_RECORDINGS="${MAX_RECORDINGS:-50}"
+PURGE_RECORDINGS_ON_START="${PURGE_RECORDINGS_ON_START:-false}"
 LOG_LEVEL="${LOG_LEVEL:-info}"
 ROI_X_START="${ROI_X_START:-0}"
 ROI_X_END="${ROI_X_END:-100}"
@@ -90,6 +92,12 @@ export HTTP_PORT=8081
 
 # Create directories
 mkdir -p "$RECORDINGS_PATH"
+
+if [ "$PURGE_RECORDINGS_ON_START" = "true" ]; then
+    echo "[WARNING] Purging all existing security recordings on startup..."
+    find "$RECORDINGS_PATH" -mindepth 1 -delete
+    echo "[INFO] Recording purge completed"
+fi
 
 echo "========================================"
 echo "Security Camera Motion Detection"
