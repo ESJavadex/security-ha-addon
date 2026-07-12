@@ -1,5 +1,8 @@
-ARG BUILD_FROM
-FROM ${BUILD_FROM}
+ARG BUILD_ARCH=amd64
+FROM ghcr.io/home-assistant/${BUILD_ARCH}-base:3.19
+
+ARG BUILD_VERSION=dev
+ENV ADDON_VERSION=${BUILD_VERSION}
 
 # Install system dependencies
 RUN apk add --no-cache \
@@ -28,7 +31,7 @@ RUN pip install --no-cache-dir \
 RUN mkdir -p /app /share/security_recordings
 
 # Cache buster - change this value to force rebuild of COPY layers
-ARG CACHE_BUST=20260210v4
+ARG CACHE_BUST=20260712-recording-v3
 
 # Copy application files
 COPY motion_detector.py /app/

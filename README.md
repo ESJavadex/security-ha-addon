@@ -8,6 +8,8 @@ Home Assistant add-on for motion detection and recording from HLS camera streams
 - **Smart Filtering**: Time threshold to ignore brief motion (walk-bys)
 - **Automatic Recording**: Records clips when motion is detected
 - **Pre/Post Roll**: Captures moments before and after motion
+- **Resilient Recording**: Recovers from stream interruptions without duplicate footage
+- **Visible Version**: Shows the installed add-on version in the recordings UI
 - **Home Assistant Integration**: Exposes sensors for automations
 - **HTTP API**: Access recordings and state via REST endpoints
 - **Low Resource Usage**: Optimized for Raspberry Pi 4
@@ -37,15 +39,14 @@ All options are configurable via the Home Assistant add-on Configuration tab.
 |--------|---------|-------------|
 | `stream_url` | - | HLS stream URL (m3u8) |
 | `motion_threshold` | 5000 | Pixel area to trigger motion (lower = more sensitive) |
-| `motion_min_duration` | 3 | Seconds motion must persist before triggering |
-| `roi_x_start` | 33 | Detection zone left edge (0-100%) |
-| `roi_x_end` | 66 | Detection zone right edge (0-100%) |
+| `motion_min_duration` | 5 | Seconds motion must persist before triggering |
+| `roi_x_start` | 0 | Detection zone left edge (0-100%) |
+| `roi_x_end` | 100 | Detection zone right edge (0-100%) |
 | `roi_y_start` | 5 | Detection zone top edge (0-100%) |
-| `roi_y_end` | 95 | Detection zone bottom edge (0-100%) |
-| `recording_pre_roll` | 6 | Seconds to capture before motion |
-| `recording_post_roll` | 5 | Seconds to capture after motion ends |
+| `roi_y_end` | 85 | Detection zone bottom edge (0-100%) |
+| `recording_pre_roll` | 10 | Seconds to capture before motion |
+| `recording_post_roll` | 0 | Extra seconds after the motion cooldown |
 | `motion_cooldown` | 10 | Seconds without motion before ending detection |
-| `light_change_threshold` | 0 | Brightness change % to log (0=disabled, for debugging) |
 | `recordings_path` | /share/security_recordings | Where to save recordings |
 | `max_recordings` | 50 | Maximum recordings to keep |
 | `log_level` | info | Logging level (debug/info/warning/error) |

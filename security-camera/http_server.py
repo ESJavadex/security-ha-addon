@@ -10,8 +10,32 @@ from http.server import HTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 import logging
+import tempfile
 
 logger = logging.getLogger(__name__)
+APP_VERSION = os.environ.get('ADDON_VERSION', 'dev')
+
+
+def atomic_write_json(path, data):
+    """Replace a JSON file atomically so readers never observe an empty file."""
+    path = Path(path)
+    fd, temp_path = tempfile.mkstemp(
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+    )
+    try:
+        with os.fdopen(fd, 'w') as handle:
+            json.dump(data, handle, indent=2)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+    except Exception:
+        try:
+            os.unlink(temp_path)
+        except OSError:
+            pass
+        raise
 
 # Embedded HTML for the recordings viewer UI
 INDEX_HTML_TEMPLATE = '''<!DOCTYPE html>
@@ -44,6 +68,15 @@ INDEX_HTML_TEMPLATE = '''<!DOCTYPE html>
             display: flex;
             align-items: center;
             gap: 0.5rem;
+        }
+        .version-badge {
+            padding: 0.15rem 0.45rem;
+            border: 1px solid #1a4a7a;
+            border-radius: 999px;
+            color: #93c5fd;
+            font-size: 0.7rem;
+            font-weight: 600;
+            line-height: 1;
         }
         .status {
             display: flex;
@@ -618,6 +651,7 @@ INDEX_HTML_TEMPLATE = '''<!DOCTYPE html>
                 <path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
             </svg>
             Security Recordings
+            <span class="version-badge">v%%APP_VERSION%%</span>
         </h1>
         <div class="status">
             <span class="status-dot" id="statusDot"></span>
@@ -1482,7 +1516,11 @@ class SecurityHTTPHandler(SimpleHTTPRequestHandler):
         ingress_path = self.headers.get('X-Ingress-Path', '')
 
         # Inject the base path into the HTML template
-        html = INDEX_HTML_TEMPLATE.replace('%%BASE_PATH%%', ingress_path)
+        html = (
+            INDEX_HTML_TEMPLATE
+            .replace('%%BASE_PATH%%', ingress_path)
+            .replace('%%APP_VERSION%%', APP_VERSION)
+        )
 
         self.send_response(200)
         self.send_header('Content-Type', 'text/html; charset=utf-8')
@@ -1606,8 +1644,7 @@ class SecurityHTTPHandler(SimpleHTTPRequestHandler):
                 # Save cleaned metadata if we removed orphans
                 if orphaned > 0:
                     logger.info(f"Cleaned up {orphaned} orphaned recording entries")
-                    with open(metadata_file, 'w') as f:
-                        json.dump(recordings, f, indent=2)
+                    atomic_write_json(metadata_file, recordings)
             else:
                 recordings = []
 
@@ -1719,8 +1756,7 @@ class SecurityHTTPHandler(SimpleHTTPRequestHandler):
 
         # Update metadata - remove from list
         recordings.remove(recording_to_delete)
-        with open(metadata_file, 'w') as f:
-            json.dump(recordings, f, indent=2)
+        atomic_write_json(metadata_file, recordings)
 
         logger.info(f"Recording deleted: {filename}, total files removed: {len(deleted_files)}")
 
@@ -1861,8 +1897,7 @@ class SecurityHTTPHandler(SimpleHTTPRequestHandler):
                 total_files_removed += len(deleted_files)
 
             # Save updated metadata
-            with open(metadata_file, 'w') as f:
-                json.dump(recordings, f, indent=2)
+            atomic_write_json(metadata_file, recordings)
 
             logger.info(f"Bulk delete completed: {total_deleted} recordings, {total_files_removed} files removed")
 
@@ -1918,8 +1953,7 @@ class SecurityHTTPHandler(SimpleHTTPRequestHandler):
             recording['favorite'] = not recording.get('favorite', False)
 
             # Save metadata
-            with open(metadata_file, 'w') as f:
-                json.dump(recordings, f, indent=2)
+            atomic_write_json(metadata_file, recordings)
 
             logger.info(f"Recording {filename} favorite: {recording['favorite']}")
 
@@ -2028,8 +2062,7 @@ class SecurityHTTPHandler(SimpleHTTPRequestHandler):
 
             # Update metadata
             recording['llm_analysis'] = result.to_dict()
-            with open(metadata_file, 'w') as f:
-                json.dump(recordings, f, indent=2)
+            atomic_write_json(metadata_file, recordings)
 
             logger.info(f"LLM analysis complete for {filename}: false_positive={result.is_false_positive}")
 
@@ -2090,8 +2123,7 @@ class SecurityHTTPHandler(SimpleHTTPRequestHandler):
             recording['llm_analysis']['description'] = 'Manually set by user'
 
             # Save metadata
-            with open(metadata_file, 'w') as f:
-                json.dump(recordings, f, indent=2)
+            atomic_write_json(metadata_file, recordings)
 
             logger.info(f"Recording {filename} false_positive: {not current_fp}")
 
@@ -2137,6 +2169,7 @@ class SecurityHTTPHandler(SimpleHTTPRequestHandler):
         health = {
             "status": "ok",
             "service": "security-camera-motion",
+            "version": APP_VERSION,
             "recordings_path": self.recordings_path,
             "state_file": self.state_file
         }
@@ -2167,8 +2200,7 @@ class SecurityHTTPHandler(SimpleHTTPRequestHandler):
     def _save_settings(self, settings: dict):
         """Save settings to file."""
         try:
-            with open(self.settings_file, 'w') as f:
-                json.dump(settings, f, indent=2)
+            atomic_write_json(self.settings_file, settings)
             logger.info(f"Settings saved: {settings}")
         except Exception as e:
             logger.error(f"Error saving settings: {e}")
