@@ -14,9 +14,7 @@ CONFIG_FILE="/data/options.json"
 echo "[DEBUG] Checking for config file: ${CONFIG_FILE}"
 if [ -f "$CONFIG_FILE" ]; then
     echo "[INFO] Found config file, reading options..."
-    echo "[DEBUG] Config file contents:"
-    cat "$CONFIG_FILE"
-    echo ""
+    # Never print options.json: it may contain llm_api_key.
 
     # Read config using jq (more reliable than bashio)
     STREAM_URL=$(jq -r '.stream_url // empty' "$CONFIG_FILE")
