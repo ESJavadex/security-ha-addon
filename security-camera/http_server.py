@@ -13,7 +13,12 @@ import logging
 import tempfile
 
 logger = logging.getLogger(__name__)
-APP_VERSION = os.environ.get('ADDON_VERSION', 'dev')
+APP_VERSION = os.environ.get('ADDON_VERSION', '').strip()
+if not APP_VERSION:
+    try:
+        APP_VERSION = Path('/app/VERSION').read_text().strip()
+    except OSError:
+        APP_VERSION = 'dev'
 
 
 def atomic_write_json(path, data):
