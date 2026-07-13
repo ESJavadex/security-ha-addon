@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.1
+
+- Persist the Supervisor build version into the image so the UI always shows
+  the exact installed release.
+
 ## 0.3.0
 
 - Capture explicit HLS pre-roll before each motion event.

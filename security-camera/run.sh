@@ -5,6 +5,10 @@
 
 set -e
 
+if [ -s /app/VERSION ]; then
+    export ADDON_VERSION="$(cat /app/VERSION)"
+fi
+
 echo "[INFO] Starting Security Camera Motion Detection Add-on..."
 echo "[INFO] Checking environment..."
 

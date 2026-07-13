@@ -29,6 +29,7 @@ RUN pip install --no-cache-dir \
 
 # Create directories
 RUN mkdir -p /app /share/security_recordings
+RUN printf '%s' "${BUILD_VERSION}" > /app/VERSION
 
 # Cache buster - change this value to force rebuild of COPY layers
 ARG CACHE_BUST=20260712-recording-v3
