@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.2
+
+- Serve each HTTP request in its own thread. The single-threaded server handled
+  one request at a time, so a single client that opened a connection and stopped
+  reading blocked every other request, including the motion detector's own stream
+  reads. On 2026-09-13 this left the camera 18 hours without recording while the
+  add-on still reported `started`.
+- Drop connections that stall for longer than 30 seconds so a dead client cannot
+  hold a thread forever.
+
 ## 0.3.1
 
 - Persist the Supervisor build version into the image so the UI always shows

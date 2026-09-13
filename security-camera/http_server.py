@@ -6,13 +6,16 @@ HTTP server for serving recordings and API endpoints.
 import json
 import os
 import sys
-from http.server import HTTPServer, SimpleHTTPRequestHandler
+from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 import logging
 import tempfile
 
 logger = logging.getLogger(__name__)
+# Segundos que puede tardar una sola lectura o escritura del socket antes de dar
+# al cliente por muerto y liberar su hilo.
+CONNECTION_TIMEOUT = 30
 APP_VERSION = os.environ.get('ADDON_VERSION', '').strip()
 if not APP_VERSION:
     try:
@@ -1475,6 +1478,10 @@ class SecurityHTTPHandler(SimpleHTTPRequestHandler):
         except (ConnectionResetError, BrokenPipeError) as e:
             # Client disconnected mid-transfer - expected behavior, don't spam logs
             logger.debug(f"Client disconnected: {e}")
+        except TimeoutError as e:
+            # Cliente que abre la conexion y deja de leer. Con CONNECTION_TIMEOUT
+            # su hilo muere solo en vez de quedarse colgado para siempre.
+            logger.debug(f"Client timed out: {e}")
 
     def log_message(self, format, *args):
         """Log to stderr for Home Assistant."""
@@ -2290,11 +2297,21 @@ def run_server(port: int = 8081, recordings_path: str = "/share/security_recordi
     SecurityHTTPHandler.recordings_path = recordings_path
     SecurityHTTPHandler.state_file = state_file
     SecurityHTTPHandler.settings_file = settings_file
+    # Se aplica a cada lectura y escritura del socket, no a la descarga entera:
+    # bajar una grabacion grande sigue funcionando mientras el cliente lea.
+    SecurityHTTPHandler.timeout = CONNECTION_TIMEOUT
 
     # Ensure directory exists
     Path(recordings_path).mkdir(parents=True, exist_ok=True)
 
-    server = HTTPServer(('0.0.0.0', port), SecurityHTTPHandler)
+    # ThreadingHTTPServer y no HTTPServer: el servidor de un solo hilo atiende una
+    # peticion cada vez, asi que un unico cliente que abra la conexion y deje de
+    # leer bloquea a todos los demas. El 13 de septiembre de 2026 eso dejo 18 h sin
+    # grabar: un cliente con 3,7 MB atascados en la cola de envio congelo el
+    # servidor y el add-on siguio marcado como "started" sin una sola alerta.
+    server = ThreadingHTTPServer(('0.0.0.0', port), SecurityHTTPHandler)
+    # Los hilos no deben impedir que el add-on pare.
+    server.daemon_threads = True
     logger.info(f"HTTP server starting on port {port}")
     logger.info(f"Serving recordings from: {recordings_path}")
     logger.info(f"Settings file: {settings_file}")
