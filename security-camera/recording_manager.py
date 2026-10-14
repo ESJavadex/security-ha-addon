@@ -38,6 +38,8 @@ class Recording:
     screenshots: Optional[List[str]] = None  # List of screenshot filenames
     favorite: bool = False  # User-marked as important
     llm_analysis: Optional[dict] = None  # LLM analysis result
+    trigger: Optional[str] = None  # "person" or "motion" (what started the event)
+    person_score: Optional[float] = None  # best person detector score in the event
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -136,8 +138,9 @@ class RecordingManager:
 
                 recordings = []
                 orphaned = 0
+                known = set(Recording.__dataclass_fields__)
                 for r in data:
-                    rec = Recording(**r)
+                    rec = Recording(**{k: v for k, v in r.items() if k in known})
                     # Check if the video file still exists
                     video_path = Path(rec.filepath)
                     if video_path.exists():
@@ -1059,7 +1062,43 @@ class RecordingManager:
 
     # ── Recording management ────────────────────────────────────────────
 
-    def start_recording(self, motion_start_time: Optional[float] = None):
+    def _person_snapshot_name(self, recording: Recording) -> str:
+        return f"{Path(recording.filename).stem}_person.jpg"
+
+    def _write_person_snapshot(self, recording: Recording, snapshot) -> None:
+        """Save the detector frame (with the person boxed) as the event thumbnail."""
+        if snapshot is None:
+            return
+        try:
+            import cv2
+            path = self.recordings_path / self._person_snapshot_name(recording)
+            tmp = path.with_name(f".{path.name}.tmp.jpg")
+            if cv2.imwrite(str(tmp), snapshot, [cv2.IMWRITE_JPEG_QUALITY, 85]):
+                os.replace(tmp, path)
+        except Exception as e:
+            logger.warning(f"Could not save person snapshot: {e}")
+
+    def update_event(self, trigger: Optional[str] = None, person_score: Optional[float] = None, snapshot=None):
+        """Attach detector info to the recording in progress (upgrade motion -> person, best score)."""
+        with self._lock:
+            rec = self._current_recording if self._recording else None
+            if rec is None:
+                return
+            if trigger == "person" or (trigger and not rec.trigger):
+                rec.trigger = trigger
+            better = person_score is not None and (rec.person_score is None or person_score > rec.person_score)
+            if better:
+                rec.person_score = round(float(person_score), 3)
+        if better:
+            self._write_person_snapshot(rec, snapshot)
+
+    def start_recording(
+        self,
+        motion_start_time: Optional[float] = None,
+        trigger: Optional[str] = None,
+        person_score: Optional[float] = None,
+        snapshot=None,
+    ):
         """
         Start recording video from stream.
 
@@ -1093,8 +1132,12 @@ class RecordingManager:
             self._current_recording = Recording(
                 filename=filename,
                 filepath=str(filepath),
-                start_time=motion_start_time or time.time()
+                start_time=motion_start_time or time.time(),
+                trigger=trigger,
+                person_score=round(float(person_score), 3) if person_score is not None else None,
             )
+            if person_score is not None:
+                self._write_person_snapshot(self._current_recording, snapshot)
 
             logger.info(f"Starting recording: {filename}")
 
@@ -1242,6 +1285,10 @@ class RecordingManager:
         recording.wall_clock_duration = wall_clock_duration
         recording.filesize = filepath.stat().st_size
         screenshots = self._generate_screenshots(filepath)
+        person_snapshot = filepath.parent / self._person_snapshot_name(recording)
+        if person_snapshot.exists():
+            # Best person frame first: it becomes the thumbnail and the HA notification image
+            screenshots = [person_snapshot.name] + (screenshots or [])
         recording.screenshots = screenshots
         if screenshots:
             recording.thumbnail = str(filepath.parent / screenshots[0])

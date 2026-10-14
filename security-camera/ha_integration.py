@@ -8,6 +8,8 @@ or use the HTTP API endpoint.
 """
 
 import json
+import os
+import tempfile
 import time
 import threading
 import logging
@@ -73,6 +75,9 @@ class HAIntegration:
         self.latest_recording_time: Optional[float] = None
         self.latest_thumbnail: Optional[str] = None
 
+        # Extra detector fields (person detection, scene); merged into the JSON
+        self.detector_stats: Dict[str, Any] = {}
+
         # Stats
         self.start_time = time.time()
         self.frames_processed = 0
@@ -95,21 +100,20 @@ class HAIntegration:
     ):
         """Update motion detection state."""
         with self._lock:
+            was_detected = self.motion_detected
             self.motion_detected = detected
             self.motion_state = state
             self.frames_processed = frames_processed
 
+            today = datetime.now().strftime("%Y-%m-%d")
+            if self._last_event_date != today:
+                self.motion_events_today = 0
+                self._last_event_date = today
+
             if detected:
                 self.last_motion_time = time.time()
-
-                # Track daily events
-                today = datetime.now().strftime("%Y-%m-%d")
-                if self._last_event_date != today:
-                    self.motion_events_today = 0
-                    self._last_event_date = today
-
-                # Only increment on state transition to active
-                if state == "active" and not self.motion_detected:
+                # Count one event per transition to active
+                if not was_detected:
                     self.motion_events_today += 1
 
     def update_recording_state(
@@ -128,6 +132,11 @@ class HAIntegration:
                 self.latest_recording = latest_recording
                 self.latest_recording_time = latest_recording_time
                 self.latest_thumbnail = latest_thumbnail
+
+    def update_detector_stats(self, stats: Dict[str, Any]):
+        """Store extra detector fields exposed alongside the classic sensors."""
+        with self._lock:
+            self.detector_stats = dict(stats)
 
     def _format_timestamp(self, ts: Optional[float]) -> Optional[str]:
         """Format Unix timestamp as ISO string."""
@@ -155,9 +164,19 @@ class HAIntegration:
     def _write_state(self):
         """Write current state to JSON file."""
         state = self.get_state()
+        # Atomic replace: the HTTP API and HA read this file every second and a
+        # half-written file made /api/state answer 500.
         try:
-            with open(self.state_file, 'w') as f:
-                json.dump(state.to_dict(), f, indent=2)
+            fd, tmp = tempfile.mkstemp(dir=self.state_file.parent, prefix=".state.", suffix=".tmp")
+            try:
+                with os.fdopen(fd, 'w') as f:
+                    with self._lock:
+                        extra = dict(self.detector_stats)
+                    json.dump({**state.to_dict(), **extra}, f, indent=2)
+                os.replace(tmp, self.state_file)
+            except BaseException:
+                os.unlink(tmp)
+                raise
         except Exception as e:
             logger.error(f"Error writing state file: {e}")
 

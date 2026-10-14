@@ -19,7 +19,11 @@ CONNECTION_TIMEOUT = 30
 APP_VERSION = os.environ.get('ADDON_VERSION', '').strip()
 if not APP_VERSION:
     try:
-        APP_VERSION = Path('/app/VERSION').read_text().strip()
+        # /app in the add-on image, next to this file in the standalone deploy
+        _vfile = Path('/app/VERSION')
+        if not _vfile.exists():
+            _vfile = Path(__file__).resolve().parent / 'VERSION'
+        APP_VERSION = _vfile.read_text().strip()
     except OSError:
         APP_VERSION = 'dev'
 
@@ -670,6 +674,9 @@ INDEX_HTML_TEMPLATE = '''<!DOCTYPE html>
             <select id="filterFavorites">
                 <option value="all">All recordings</option>
                 <option value="favorites">Favorites only</option>
+                <option value="person">People only</option>
+                <option value="motion">Motion without person</option>
+                <option value="legacy">Old detector</option>
             </select>
             <select id="filterAnalysis">
                 <option value="all">All analysis</option>
@@ -866,6 +873,12 @@ INDEX_HTML_TEMPLATE = '''<!DOCTYPE html>
 
             if (favFilter === 'favorites') {
                 filteredRecordings = filteredRecordings.filter(r => r.favorite);
+            } else if (favFilter === 'person') {
+                filteredRecordings = filteredRecordings.filter(r => r.trigger === 'person');
+            } else if (favFilter === 'motion') {
+                filteredRecordings = filteredRecordings.filter(r => r.trigger === 'motion');
+            } else if (favFilter === 'legacy') {
+                filteredRecordings = filteredRecordings.filter(r => !r.trigger);
             }
 
             if (analysisFilter === 'real') {
@@ -932,7 +945,7 @@ INDEX_HTML_TEMPLATE = '''<!DOCTYPE html>
                 const analysis = r.llm_analysis || null;
                 const isFP = analysis && analysis.is_false_positive;
                 const isAnalyzed = analysis !== null;
-                const hasPerson = analysis && analysis.has_person;
+                const hasPerson = analysis && analysis.has_person || r.trigger === 'person';
 
                 // Select 4 frames evenly distributed from screenshots
                 const frameCount = Math.min(4, screenshots.length);
@@ -978,7 +991,7 @@ INDEX_HTML_TEMPLATE = '''<!DOCTYPE html>
                             </div>
                             ${isFav ? '<div class="favorite-badge">★</div>' : ''}
                             ${isAnalyzed ? '<div class="analyzed-badge">✓</div>' : ''}
-                            ${hasPerson ? '<div class="person-badge">👤 PERSON</div>' : (isFP ? '<div class="fp-badge">FP</div>' : '')}
+                            ${hasPerson ? `<div class="person-badge">👤 PERSON${r.person_score ? ' ' + Math.round(r.person_score * 100) + '%' : ''}</div>` : (isFP ? '<div class="fp-badge">FP</div>' : '')}
                             <div class="play-icon"></div>
                             <div class="duration">${formatDuration(r.duration)}</div>
                         </div>
@@ -2334,5 +2347,6 @@ if __name__ == "__main__":
     port = int(os.environ.get('HTTP_PORT', 8081))
     recordings = os.environ.get('RECORDINGS_PATH', '/share/security_recordings')
     state = os.environ.get('STATE_FILE', '/share/security_state.json')
+    settings = os.environ.get('SETTINGS_FILE', '/share/security_settings.json')
 
-    run_server(port, recordings, state)
+    run_server(port, recordings, state, settings)

@@ -12,6 +12,11 @@ Home Assistant add-on for motion detection and recording from HLS camera streams
 |------------|----------|------------|---------------|
 | **Production** | Raspberry Pi 4 (Home Assistant OS) | Alpine (via `BUILD_FROM`) | bashio (config.yaml) |
 | **Development** | macOS (local-test/) | Debian (python:3.11-slim) | Environment variables (.env) |
+| **Production since 2026-10-15** | minipc16 VM 150 `seccam` (Debian 13, systemd) | — | `/etc/seccam/seccam.env` — see `deploy/README.md` |
+
+The HA add-on is stopped (`boot: manual`) and kept as rollback. Deploy with
+`deploy/install-vm.sh`; recordings live on the WD of minipc32 (SMB). Tune the
+detector against real footage with `tools/replay.py` before deploying.
 
 ## Architecture
 
@@ -27,7 +32,9 @@ HLS Stream → motion_detector (1 fps) → motion events → recording_manager
 ```
 
 ### Core Components
-- **motion_detector.py** - OpenCV MOG2 background subtraction, morphological noise filtering
+- **motion_detector.py** - persistent ffmpeg reader (4 fps), light/exposure and camera-motion filters, MOG2 blobs, person-driven events
+- **person_detector.py** - YOLOX-s (opencv_zoo, Apache-2.0) via OpenCV DNN, person class only
+- **service.py** - wires detector + recorder + state file (used by run.sh and systemd)
 - **recording_manager.py** - FFmpeg stream copy (no transcoding), pre/post roll, auto-cleanup
 - **ha_integration.py** - JSON state file for HA sensor integration (no MQTT)
 - **http_server.py** - REST API for recordings and state

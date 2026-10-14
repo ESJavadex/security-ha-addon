@@ -36,6 +36,8 @@ ARG CACHE_BUST=20260712-recording-v3
 
 # Copy application files
 COPY motion_detector.py /app/
+COPY service.py /app/
+COPY person_detector.py /app/
 COPY recording_manager.py /app/
 COPY ha_integration.py /app/
 COPY http_server.py /app/

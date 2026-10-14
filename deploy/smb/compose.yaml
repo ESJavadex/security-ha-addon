@@ -1,0 +1,25 @@
+# Recurso SMB del WD para las grabaciones de la mirilla (VM 150 seccam de minipc16 + HA).
+name: seccam-smb
+services:
+  smb:
+    build: .
+    image: local/seccam-smb:1
+    container_name: seccam-smb
+    restart: unless-stopped
+    ports:
+      - "445:445"
+    volumes:
+      - type: bind
+        source: /mnt/vault/seccam/recordings
+        target: /data
+        bind:
+          create_host_path: false
+    secrets: [seccam.pass, hass.pass]
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETUID, SETGID, NET_BIND_SERVICE]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 256m
+    pids_limit: 200
+secrets:
+  seccam.pass: {file: ./secrets/seccam.pass}
+  hass.pass: {file: ./secrets/hass.pass}
