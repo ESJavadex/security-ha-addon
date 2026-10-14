@@ -2,6 +2,8 @@
 Description=Seccam motion/person detector and recorder
 After=network-online.target remote-fs.target
 Wants=network-online.target
+# Keep retrying while the WD share is down instead of giving up
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -9,9 +11,12 @@ User=seccamd
 Group=seccamd
 EnvironmentFile=/etc/seccam/seccam.env
 WorkingDirectory=/opt/seccam/app
+# Never start without the WD mounted: with an empty recordings dir the recorder
+# would rewrite recordings.json without the existing entries.
+ExecStartPre=/bin/sh -c 'ls /share/security_recordings >/dev/null 2>&1; mountpoint -q /share/security_recordings'
 ExecStart=/usr/bin/python3 /opt/seccam/app/service.py
 Restart=always
-RestartSec=5
+RestartSec=15
 # Hardening
 NoNewPrivileges=yes
 ProtectSystem=strict
