@@ -157,6 +157,7 @@ def main():
             'scene': stats['scene'],
             'brightness': stats['brightness'],
             'light_changes': stats['light_changes'],
+            'camera_moves': stats['camera_moves'],
             'person_detector': stats['person_detector'],
             'person_ms': stats['person_ms'],
             'stream_restarts': stats['stream_restarts'],
