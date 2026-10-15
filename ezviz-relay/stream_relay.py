@@ -46,6 +46,24 @@ class SessionError(Exception):
     pass
 
 
+class StreamStalled(Exception):
+    pass
+
+
+def sd_notify(msg):
+    """Tell systemd we're alive (WatchdogSec). No-op outside systemd."""
+    addr = os.environ.get("NOTIFY_SOCKET")
+    if not addr:
+        return
+    if addr.startswith("@"):
+        addr = "\0" + addr[1:]
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as sock:
+            sock.sendto(msg.encode(), addr)
+    except OSError:
+        pass
+
+
 class StreamSession:
     """One VTDU stream session; a reader thread queues its video payloads."""
 
@@ -149,6 +167,10 @@ class Relay:
         self.hls_time = int(os.environ.get("HLS_TIME", 2))
         self.hls_list_size = int(os.environ.get("HLS_LIST_SIZE", 10))
         self.handover_after = float(os.environ.get("HANDOVER_AFTER", 20))
+        # No video written for this long = the relay is wedged; exit so systemd restarts it
+        self.stall_exit = float(os.environ.get("STALL_EXIT", 45))
+        self.last_data = time.time()
+        self._last_ping = 0.0
         self.camera = None
         self._devices = None
         self._devices_at = 0.0
@@ -264,7 +286,17 @@ class Relay:
         self.ffmpeg = subprocess.Popen(cmd, stdin=subprocess.PIPE)
         log.info(f"ffmpeg started (pid {self.ffmpeg.pid})")
 
+    def check_stall(self):
+        idle = time.time() - self.last_data
+        if idle > self.stall_exit:
+            raise StreamStalled(f"no video for {idle:.0f}s (limit {self.stall_exit:.0f}s)")
+        # Ping the systemd watchdog only while video flows, so a hard hang gets us killed
+        if time.time() - self._last_ping > 5:
+            self._last_ping = time.time()
+            sd_notify("WATCHDOG=1")
+
     def write(self, data):
+        self.last_data = time.time()
         if self._raw_dump:
             self._raw_dump.write(data)
         if self.ffmpeg is None or self.ffmpeg.poll() is not None:
@@ -298,6 +330,10 @@ class Relay:
                 nxt = self.open_session()
             except SessionError as e:
                 log.error(str(e))
+            except (EzvizMFARequired, EzvizAuthError):
+                raise
+            except Exception as e:
+                log.error(f"preparing next session failed: {e!r}")
 
         while not self._stop.is_set():
             # Open the next session ahead of the expected cut
@@ -317,6 +353,7 @@ class Relay:
                 gap_started = None
                 continue
 
+            self.check_stall()
             try:
                 data = current.queue.get(timeout=0.2)
             except queue.Empty:
@@ -338,6 +375,7 @@ class Relay:
                 while nxt is None or nxt.first_data_at is None:
                     if self._stop.is_set():
                         return
+                    self.check_stall()
                     if nxt is None and not nxt_thread.is_alive():
                         nxt_thread = threading.Thread(target=prepare_next, daemon=True, name="prepare-next")
                         nxt_thread.start()
@@ -379,6 +417,9 @@ def main():
     except EzvizAuthError as e:
         log.error(f"EZVIZ rejected the login: {e}")
         sys.exit(EXIT_AUTH)
+    except StreamStalled as e:
+        log.error(f"relay stalled, exiting for restart: {e}")
+        sys.exit(1)
     finally:
         if relay.ffmpeg and relay.ffmpeg.poll() is None:
             try:

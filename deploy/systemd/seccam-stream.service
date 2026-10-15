@@ -15,10 +15,14 @@ Environment=EZVIZ_FEATURE_CODE_FILE=/var/lib/seccam/ezviz/feature_code
 WorkingDirectory=/opt/seccam/ezviz
 ExecStart=/usr/bin/python3 -u /opt/seccam/ezviz/stream_relay.py
 Restart=always
-# Back off on repeated failures (auth problems must not hammer the EZVIZ API)
-RestartSec=10
-RestartSteps=6
-RestartMaxDelaySec=1800
+# Recover fast from a wedge, but back off on repeated failures (auth problems
+# must not hammer the EZVIZ API)
+RestartSec=3
+RestartSteps=5
+RestartMaxDelaySec=300
+# Pinged only while video flows; a hard hang gets the relay killed and restarted
+WatchdogSec=90
+NotifyAccess=main
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
