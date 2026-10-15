@@ -5,24 +5,34 @@ add-on (the Raspberry Pi was overloaded). The add-on is stopped with `boot: manu
 and kept as a rollback.
 
 ```
-EZVIZ add-on (Pi, :8080 HLS) ──► VM 150 seccam (192.168.1.148)
-                                   seccam-detector  (service.py)
-                                   seccam-http      (http_server.py :8081)
-                                        │
-                     SMB 3.1.1 (seal) ──┘──► minipc32 WD /mnt/vault/seccam/recordings
-                                              (container seccam-smb, deploy/smb/)
-Home Assistant: sensors curl http://192.168.1.148:8081/api/state
-                recordings mounted read-only at /share/security_recordings (Supervisor mount)
-UI on the tailnet: http://100.78.128.94:8081/  (systemd-socket-proxyd on minipc16)
-                   https://minipc16.tail1ae474.ts.net:8443/ (tailscale serve)
+EZVIZ cloud (VTM :8554, VTDU :6000-6099)
+        │  HEVC, sessions of ~30 s
+        ▼
+VM 150 seccam (192.168.1.148)
+  seccam-stream   ezviz-relay/stream_relay.py: handover between sessions, one ffmpeg → H.264 HLS
+  seccam-hls      ezviz-relay/hls_server.py :8080 (CORS)
+  seccam-detector service.py (reads 127.0.0.1:8080, records with RECORDING_MODE=hls_follow)
+  seccam-http     http_server.py :8081
+        │
+        └── SMB 3.1.1 (seal) ──► minipc32 WD /mnt/vault/seccam/recordings (container seccam-smb)
+
+Home Assistant: camera.ezviz_camera → http://192.168.1.148:8080/stream.m3u8
+                sensors curl http://192.168.1.148:8081/api/state
+                recordings mounted read-only at /share/security_recordings
+Tailnet: UI http://100.78.128.94:8081/ · HLS http://100.78.128.94:8080/stream.m3u8
+         (systemd-socket-proxyd on minipc16)
 ```
+
+Both HA add-ons (motion detection and EZVIZ stream) are stopped with `boot: manual`
+and kept as rollback.
 
 ## VM
 
 - Debian 13 cloud image, 2 vCPU (`cpu: host`), 1.5 GiB, 16 GB disk, `onboot`, `protection`.
 - Proxmox firewall (only this VM has `firewall=1`; the host firewall is explicitly
-  disabled in `host.fw`): in 22/8081 from the host, 8081 from HA; out only to the HLS
-  stream, the SMB share, DNS, NTP and 80/443 to the internet (no LAN).
+  disabled in `host.fw`): in 22/8080/8081 from the host, 8080/8081 from HA; out only to
+  the SMB share, DNS, NTP, EZVIZ (443, 8554, 6000-6099) and 80 to the internet (no LAN).
+- EZVIZ relay: see `ezviz-relay/README.md`. Session files in `/var/lib/seccam/ezviz/`.
 - SSH: `ssh seccam` (ProxyJump minipc16, key only, no root login).
 - Services run as `seccamd` with systemd sandboxing (`deploy/systemd/`).
 - Config: `/etc/seccam/seccam.env` (root:seccamd 640), see `seccam.env.example`.
@@ -33,7 +43,8 @@ UI on the tailnet: http://100.78.128.94:8081/  (systemd-socket-proxyd on minipc1
 ## Deploy
 
 ```bash
-deploy/install-vm.sh          # from the repo root on the Mac
+deploy/install-vm.sh                    # code + units; does not touch the relay
+RESTART_STREAM=1 deploy/install-vm.sh   # also restart the relay (short gap in the video)
 ssh seccam journalctl -fu seccam-detector
 ```
 
