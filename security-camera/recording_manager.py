@@ -784,7 +784,8 @@ class RecordingManager:
                 str(screenshot_pattern),
             ]
             subprocess.run(cmd, timeout=120, check=True)
-            screenshots = [p.name for p in sorted(video_path.parent.glob(f"{base_name}_*.jpg"))]
+            # Only the numbered frames: the person snapshot (_person.jpg) is added separately
+            screenshots = [p.name for p in sorted(video_path.parent.glob(f"{base_name}_[0-9][0-9][0-9].jpg"))]
         except Exception as e:
             logger.error(f"Error generating screenshots for {video_path.name}: {e}")
 

@@ -939,7 +939,10 @@ INDEX_HTML_TEMPLATE = '''<!DOCTYPE html>
 
             grid.innerHTML = filteredRecordings.map((r, i) => {
                 const thumbName = r.thumbnail ? r.thumbnail.split('/').pop() : r.filename.replace('.mp4', '.jpg');
-                const screenshots = r.screenshots || [thumbName];
+                // Deduplicate, and keep the person snapshot apart from the video frames
+                const allShots = [...new Set(r.screenshots || [thumbName])];
+                const personShot = allShots.find(s => s.endsWith('_person.jpg'));
+                const screenshots = allShots.filter(s => !s.endsWith('_person.jpg'));
                 const isFav = r.favorite || false;
                 const isSelected = selectedFiles.has(r.filename);
                 const analysis = r.llm_analysis || null;
@@ -947,25 +950,27 @@ INDEX_HTML_TEMPLATE = '''<!DOCTYPE html>
                 const isAnalyzed = analysis !== null;
                 const hasPerson = analysis && analysis.has_person || r.trigger === 'person';
 
-                // Select 4 frames evenly distributed from screenshots
-                const frameCount = Math.min(4, screenshots.length);
+                // Grid: person snapshot first (if any), then video frames evenly distributed
+                const videoSlots = Math.min(personShot ? 3 : 4, screenshots.length);
                 const frameIndices = [];
-                if (frameCount === 1) {
+                if (videoSlots === 1) {
                     frameIndices.push(0);
                 } else {
-                    for (let fi = 0; fi < frameCount; fi++) {
-                        const idx = Math.floor(fi * (screenshots.length - 1) / (frameCount - 1));
-                        frameIndices.push(idx);
+                    for (let fi = 0; fi < videoSlots; fi++) {
+                        frameIndices.push(Math.floor(fi * (screenshots.length - 1) / (videoSlots - 1)));
                     }
                 }
-                const selectedFrames = frameIndices.map(idx => screenshots[idx]);
+                const cells = frameIndices.map(idx => ({
+                    src: screenshots[idx],
+                    label: `${Math.floor(idx * 5) + 1}s`, // screenshots are taken every 5 s
+                }));
+                if (personShot) cells.unshift({ src: personShot, label: '👤' });
+                const frameCount = Math.max(1, cells.length);
 
-                // Build 4-frame grid
-                const frameGridHtml = selectedFrames.map((s, idx) => {
-                    const frameTime = Math.floor(frameIndices[idx] * 5) + 1; // Assuming 5-second intervals
+                const frameGridHtml = cells.map((c, idx) => {
                     return `<div class="frame-cell">
-                        <img src="${basePath}/${s}" alt="Frame ${idx + 1}" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 160 90%22><rect fill=%22%23333%22 width=%22160%22 height=%2290%22/><text x=%2280%22 y=%2250%22 fill=%22%23666%22 text-anchor=%22middle%22 font-size=%2212%22>No frame</text></svg>'">
-                        <span class="frame-index">${frameTime}s</span>
+                        <img src="${basePath}/${c.src}" alt="Frame ${idx + 1}" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 160 90%22><rect fill=%22%23333%22 width=%22160%22 height=%2290%22/><text x=%2280%22 y=%2250%22 fill=%22%23666%22 text-anchor=%22middle%22 font-size=%2212%22>No frame</text></svg>'">
+                        <span class="frame-index">${c.label}</span>
                     </div>`;
                 }).join('');
 
