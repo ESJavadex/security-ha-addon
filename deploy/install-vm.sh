@@ -22,13 +22,17 @@ ssh "$HOST" "set -e
 
 rsync -a --delete --exclude __pycache__ --rsync-path="sudo rsync" \
   "$ROOT/security-camera/" "$HOST:/opt/seccam/app/"
+rsync -a --delete --exclude __pycache__ --exclude README.md --rsync-path="sudo rsync" \
+  "$ROOT/ezviz-relay/" "$HOST:/opt/seccam/ezviz/"
 rsync -a --rsync-path="sudo rsync" "$ROOT/deploy/systemd/" "$HOST:/etc/systemd/system/"
 ssh "$HOST" "set -e
   printf '%s' '$VERSION' | sudo tee /opt/seccam/app/VERSION >/dev/null
-  sudo chown -R root:root /opt/seccam/app /etc/systemd/system/seccam-*.service && sudo chmod -R u=rwX,go=rX /opt/seccam/app && sudo chmod 644 /etc/systemd/system/seccam-*.service
+  sudo chown -R root:root /opt/seccam/app /opt/seccam/ezviz /etc/systemd/system/seccam-*.service && sudo chmod -R u=rwX,go=rX /opt/seccam/app /opt/seccam/ezviz && sudo chmod 644 /etc/systemd/system/seccam-*.service
   if ! sudo test -f /etc/seccam/seccam.env; then echo 'missing /etc/seccam/seccam.env (see deploy/seccam.env.example)'; exit 1; fi
   sudo systemctl daemon-reload
-  sudo systemctl enable seccam-detector seccam-http >/dev/null
-  sudo systemctl restart seccam-http seccam-detector
-  sleep 3; systemctl is-active seccam-http seccam-detector"
+  sudo systemctl enable seccam-hls seccam-stream seccam-detector seccam-http >/dev/null
+  # The relay only restarts when its code changed: a restart is a short gap in the video
+  sudo systemctl restart seccam-hls seccam-http seccam-detector
+  ${RESTART_STREAM:+sudo systemctl restart seccam-stream}
+  sleep 3; systemctl is-active seccam-hls seccam-stream seccam-http seccam-detector"
 echo "Deployed $VERSION to $HOST"

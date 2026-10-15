@@ -66,6 +66,7 @@ class RecordingManager:
         max_duration: int = 300,  # 5 minutes max per clip
         llm_analyzer: Optional['LLMAnalyzer'] = None,
         llm_auto_analyze: bool = False,
+        hls_follow: bool = False,
     ):
         """
         Initialize recording manager.
@@ -88,6 +89,9 @@ class RecordingManager:
         self.max_duration = max_duration
         self.llm_analyzer = llm_analyzer
         self.llm_auto_analyze = llm_auto_analyze
+        # Copy the stream's own HLS segments instead of running a second ffmpeg.
+        # Exact (no overlap, no gap) when the playlist is local and continuous.
+        self.hls_follow = hls_follow
 
         # State
         self._recording = False
@@ -108,6 +112,7 @@ class RecordingManager:
         self._last_segment_growth = time.monotonic()
         self._stall_timeout = 20.0
         self._damaged_segments = set()
+        self._follow_files: List[str] = []
 
         # Rolling buffer for pre-roll capture
         self._buffer_dir = self.recordings_path / "_buffer"
@@ -422,6 +427,80 @@ class RecordingManager:
             except OSError:
                 pass
             return []
+
+    def _read_playlist(self):
+        """Return [(discontinuity_before, duration, uri)] from the stream playlist."""
+        playlist_url = self.stream_url
+        with urlopen(playlist_url, timeout=5) as response:
+            text = response.read().decode('utf-8', errors='replace')
+        segments, duration, discont = [], None, False
+        for line in (l.strip() for l in text.splitlines()):
+            if not line:
+                continue
+            if line.startswith('#EXT-X-DISCONTINUITY'):
+                discont = True
+            elif line.startswith('#EXTINF:'):
+                try:
+                    duration = float(line.split(':', 1)[1].split(',', 1)[0])
+                except ValueError:
+                    duration = None
+            elif not line.startswith('#') and duration is not None:
+                segments.append((discont, duration, urljoin(playlist_url, line)))
+                duration, discont = None, False
+        return segments
+
+    def _follow_hls(self, recording: Recording, files: List[str]):
+        """Append the stream's HLS segments (pre-roll first) to the recording until stopped."""
+        seen = set()
+        output = None
+        first = True
+        try:
+            while True:
+                stopping = self._monitor_stop_event.is_set()
+                try:
+                    segments = self._read_playlist()
+                except Exception as e:
+                    logger.warning(f"HLS follow: playlist read failed: {e}")
+                    segments = []
+                if first and segments:
+                    # Pre-roll: the newest segments covering pre_roll seconds
+                    keep, acc = [], 0.0
+                    for seg in reversed(segments):
+                        keep.append(seg)
+                        acc += seg[1]
+                        if acc >= self.pre_roll:
+                            break
+                    for seg in segments:
+                        if seg not in keep:
+                            seen.add(seg[2])
+                    first = False
+                    logger.info(f"HLS follow: {acc:.1f}s pre-roll in {len(keep)} segments")
+                for discont, _, uri in segments:
+                    if uri in seen:
+                        continue
+                    seen.add(uri)
+                    try:
+                        with urlopen(uri, timeout=10) as resp:
+                            data = resp.read()
+                    except Exception as e:
+                        logger.warning(f"HLS follow: segment {uri.rsplit('/', 1)[-1]} lost: {e}")
+                        continue
+                    if output is None or discont:
+                        if output is not None:
+                            output.close()
+                        name = recording.filename.replace('.mp4', f'_seg{self._segment_index:03d}.ts')
+                        self._segment_index += 1
+                        path = self.recordings_path / name
+                        output = open(path, 'wb')
+                        files.append(str(path))
+                    output.write(data)
+                    output.flush()
+                if stopping:
+                    break
+                self._monitor_stop_event.wait(0.5)
+        finally:
+            if output is not None:
+                output.close()
 
     def _monitor_ffmpeg(self):
         """Monitor ffmpeg process and restart if it dies during recording.
@@ -1142,10 +1221,20 @@ class RecordingManager:
 
             logger.info(f"Starting recording: {filename}")
 
+            self._segment_files = []
+            if self.hls_follow:
+                self._follow_files = []
+                self._monitor_stop_event.clear()
+                self._monitor_thread = threading.Thread(
+                    target=self._follow_hls, args=(self._current_recording, self._follow_files),
+                    daemon=True,
+                )
+                self._monitor_thread.start()
+                return
+
             # Pre-roll is handled by the HLS playlist window: ffmpeg naturally
             # closed segments are downloaded explicitly. The live ffmpeg input
             # may replay part of that window; concat removes exact overlap.
-            self._segment_files = []
             self._capture_hls_preroll()
 
             # Launch first live recording segment
@@ -1199,6 +1288,7 @@ class RecordingManager:
                 monitor_thread = self._monitor_thread
                 recording = self._current_recording
                 segment_files = list(self._segment_files)
+                follow_files = self._follow_files if self.hls_follow else None
                 damaged_segments = set(self._damaged_segments)
                 end_time = time.time()
                 self._ffmpeg_process = None
@@ -1221,7 +1311,9 @@ class RecordingManager:
                         pass
 
             if monitor_thread and monitor_thread.is_alive() and monitor_thread is not threading.current_thread():
-                monitor_thread.join(timeout=5)
+                monitor_thread.join(timeout=15)
+            if follow_files is not None:
+                segment_files = list(follow_files)
 
         if recording:
             recording.end_time = end_time

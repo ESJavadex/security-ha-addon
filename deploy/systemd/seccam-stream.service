@@ -1,0 +1,47 @@
+[Unit]
+Description=Seccam EZVIZ relay (camera -> HLS without 30 s gaps)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=seccamd
+Group=seccamd
+EnvironmentFile=/etc/seccam/ezviz.env
+Environment=HLS_DIR=/var/lib/seccam/hls
+Environment=EZVIZ_TOKEN_FILE=/var/lib/seccam/ezviz/session.json
+Environment=EZVIZ_FEATURE_CODE_FILE=/var/lib/seccam/ezviz/feature_code
+WorkingDirectory=/opt/seccam/ezviz
+ExecStart=/usr/bin/python3 -u /opt/seccam/ezviz/stream_relay.py
+Restart=always
+# Back off on repeated failures (auth problems must not hammer the EZVIZ API)
+RestartSec=10
+RestartSteps=6
+RestartMaxDelaySec=1800
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ReadWritePaths=/var/lib/seccam
+UMask=0027
+MemoryMax=400M
+CPUWeight=120
+
+[Install]
+WantedBy=multi-user.target

@@ -76,7 +76,8 @@ def main():
         post_roll=post_roll,
         max_recordings=max_recordings,
         llm_analyzer=llm_analyzer,
-        llm_auto_analyze=llm_auto_analyze
+        llm_auto_analyze=llm_auto_analyze,
+        hls_follow=os.environ.get('RECORDING_MODE', 'ffmpeg').strip().lower() == 'hls_follow',
     )
 
     def on_motion_start(event: MotionEvent):
